@@ -21,7 +21,8 @@ sanitize_session_id() {
 MODEL="haiku"
 LANGUAGE="auto"
 MAX_LENGTH=30
-CONTEXT_MESSAGES=8
+HEAD_MESSAGES=3
+TAIL_MESSAGES=5
 THROTTLE_INTERVAL=240
 THROTTLE_MESSAGES=2
 LIVE_UPDATE=true
@@ -63,7 +64,8 @@ load_config() {
     MODEL=$(echo "$parsed" | jq -r '.model // "haiku"')
     LANGUAGE=$(echo "$parsed" | jq -r '.language // "auto"')
     MAX_LENGTH=$(echo "$parsed" | jq -r '.maxLength // 30')
-    CONTEXT_MESSAGES=$(echo "$parsed" | jq -r '.contextMessages // 8')
+    HEAD_MESSAGES=$(echo "$parsed" | jq -r '.contextMessages.head // 3')
+    TAIL_MESSAGES=$(echo "$parsed" | jq -r '.contextMessages.tail // 5')
     THROTTLE_INTERVAL=$(echo "$parsed" | jq -r '.throttleInterval // 240')
     THROTTLE_MESSAGES=$(echo "$parsed" | jq -r '.throttleMessages // 2')
     LIVE_UPDATE=$(echo "$parsed" | jq -r '.liveUpdate // true')
@@ -71,7 +73,8 @@ load_config() {
 
     # Validate numeric fields — fall back to defaults if not integers
     [[ "$MAX_LENGTH" =~ ^[0-9]+$ ]] || MAX_LENGTH=30
-    [[ "$CONTEXT_MESSAGES" =~ ^[0-9]+$ ]] || CONTEXT_MESSAGES=8
+    [[ "$HEAD_MESSAGES" =~ ^[0-9]+$ ]] || HEAD_MESSAGES=3
+    [[ "$TAIL_MESSAGES" =~ ^[0-9]+$ ]] || TAIL_MESSAGES=5
     [[ "$THROTTLE_INTERVAL" =~ ^[0-9]+$ ]] || THROTTLE_INTERVAL=240
     [[ "$THROTTLE_MESSAGES" =~ ^[0-9]+$ ]] || THROTTLE_MESSAGES=2
 
@@ -79,12 +82,7 @@ load_config() {
     [[ "$LIVE_UPDATE" == "true" || "$LIVE_UPDATE" == "false" ]] || LIVE_UPDATE=true
     [[ "$DEBUG" == "true" || "$DEBUG" == "false" ]] || DEBUG=false
   fi
-  # Compute head/tail split from contextMessages (≈3:5 ratio)
-  HEAD_MESSAGES=$(( CONTEXT_MESSAGES * 3 / 8 ))
-  [[ "$HEAD_MESSAGES" -lt 1 && "$CONTEXT_MESSAGES" -ge 2 ]] && HEAD_MESSAGES=1
-  TAIL_MESSAGES=$(( CONTEXT_MESSAGES - HEAD_MESSAGES ))
-
-  log "Config loaded: model=$MODEL lang=$LANGUAGE maxLen=$MAX_LENGTH ctx=${CONTEXT_MESSAGES}(h${HEAD_MESSAGES}+t${TAIL_MESSAGES}) throttle=${THROTTLE_INTERVAL}s/${THROTTLE_MESSAGES}msgs live=$LIVE_UPDATE"
+  log "Config loaded: model=$MODEL lang=$LANGUAGE maxLen=$MAX_LENGTH ctx=h${HEAD_MESSAGES}+t${TAIL_MESSAGES} throttle=${THROTTLE_INTERVAL}s/${THROTTLE_MESSAGES}msgs live=$LIVE_UPDATE"
 }
 
 # ── Cross-Platform File Timestamps ──

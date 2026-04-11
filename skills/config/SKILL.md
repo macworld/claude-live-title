@@ -22,7 +22,8 @@ Help the user view or modify their claude-live-title plugin configuration.
 | model | string | "haiku" | Model used for title generation (e.g., "haiku", "sonnet") |
 | language | string | "auto" | Title language: "auto" (detect from conversation), "zh", "en", "ja", "ko", etc. |
 | maxLength | number | 30 | Target title length in display columns (CJK=2, Latin=1), passed to the AI prompt |
-| contextMessages | number | 8 | Number of user messages sampled for title generation (split ~3:5 head/tail) |
+| contextMessages.head | number | 3 | Number of earliest user messages sampled for title generation |
+| contextMessages.tail | number | 5 | Number of most recent user messages sampled for title generation |
 | throttleInterval | number | 240 | Minimum seconds between live title updates |
 | throttleMessages | number | 2 | Minimum new user messages before live title update |
 | liveUpdate | boolean | true | Enable real-time title updates during conversation. When false, titles are only generated when the session ends. |

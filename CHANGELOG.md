@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.0.1] - 2026-04-11
+
+### Changed
+- Throttle defaults: interval 300s → 240s, messages 3 → 2
+- `contextMessages` is now an object with `head` and `tail` fields, allowing independent control over earliest and most recent message sampling
+
+### Added
+- `contextMessages.head` / `contextMessages.tail` configuration for fine-grained context sampling
+
 ## [1.0.0] - 2026-04-11
 
 First stable release.
