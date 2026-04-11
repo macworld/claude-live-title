@@ -16,6 +16,7 @@ Thumbs.db
 dev-tmux.sh
 
 # AI tool local dirs
+.codex
 .codex/
 .claude/
 
