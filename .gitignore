@@ -1,0 +1,17 @@
+# Dev docs (not shipped)
+PLAN.md
+docs/superpowers/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editors
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Temp
+*.tmp
+*.log
