@@ -142,8 +142,8 @@ echo "=== Test 9: Default config values ==="
 echo '{}' > "$CONFIG"
 load_config
 
-if [[ "$THROTTLE_INTERVAL" == "300" ]]; then report PASS "Default interval=300"; else report FAIL "Default interval=$THROTTLE_INTERVAL, expected 300"; fi
-if [[ "$THROTTLE_MESSAGES" == "3" ]]; then report PASS "Default messages=3"; else report FAIL "Default messages=$THROTTLE_MESSAGES, expected 3"; fi
+if [[ "$THROTTLE_INTERVAL" == "240" ]]; then report PASS "Default interval=240"; else report FAIL "Default interval=$THROTTLE_INTERVAL, expected 240"; fi
+if [[ "$THROTTLE_MESSAGES" == "2" ]]; then report PASS "Default messages=2"; else report FAIL "Default messages=$THROTTLE_MESSAGES, expected 2"; fi
 
 rm -f "$STATE"
 

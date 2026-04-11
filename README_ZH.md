@@ -26,7 +26,7 @@
 1. **PreToolUse（实时）** — 在你发送第一条消息后立即生成标题，之后随对话演进周期性更新（有节流机制，避免过多 API 调用）
 2. **Stop（兜底）** — 如果会话期间未生成标题，在会话结束时补充生成
 
-标题由轻量模型（默认 Haiku）根据对话消息样本（前 3 条 + 后 5 条用户消息）生成，并作为 `custom-title` 记录写入会话 transcript 文件。
+标题由轻量模型（默认 Haiku）根据对话消息样本生成——取最早的几条和最近的几条用户消息（默认共 8 条，可通过 `contextMessages` 调整），写入会话 transcript 文件作为 `custom-title` 记录。
 
 ## 安装
 
@@ -96,11 +96,15 @@ mkdir -p ~/.cache/tmp && TMPDIR=~/.cache/tmp claude
   // CJK 字符算 2 列，拉丁字符算 1 列
   "maxLength": 30,
 
-  // 实时更新最小间隔秒数（默认：300）
-  "throttleInterval": 300,
+  // 用于生成标题的用户消息采样数（默认：8）
+  // 取最早的约 3/8 条和最近的约 5/8 条用户消息
+  "contextMessages": 8,
 
-  // 实时更新最少新消息数（默认：3）
-  "throttleMessages": 3,
+  // 实时更新最小间隔秒数（默认：240）
+  "throttleInterval": 240,
+
+  // 实时更新最少新消息数（默认：2）
+  "throttleMessages": 2,
 
   // 启用实时更新（默认：true）
   // 设为 false 则仅在会话结束时生成标题
