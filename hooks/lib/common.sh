@@ -164,3 +164,81 @@ extract_user_messages() {
   [[ -z "$msgs" ]] && return 1
   echo "$msgs"
 }
+
+# ── Title Generation ──
+
+generate_title() {
+  local user_msgs="$1"
+  local system_prompt='You are a title generator. Output ONLY the title. No other text.'
+
+  local task_prompt
+  if [[ "$LANGUAGE" == "auto" ]]; then
+    task_prompt="Generate a short title (max ${MAX_LENGTH} characters) for the following conversation. Use the same language the user is writing in."
+  else
+    local lang_name
+    case "$LANGUAGE" in
+      zh) lang_name="Chinese" ;;
+      en) lang_name="English" ;;
+      ja) lang_name="Japanese" ;;
+      ko) lang_name="Korean" ;;
+      fr) lang_name="French" ;;
+      de) lang_name="German" ;;
+      es) lang_name="Spanish" ;;
+      *)  lang_name="$LANGUAGE" ;;
+    esac
+    task_prompt="Generate a short title (max ${MAX_LENGTH} characters) for the following conversation. Write the title in ${lang_name}."
+  fi
+
+  log "Generating title: model=$MODEL language=$LANGUAGE"
+
+  local title_raw
+  title_raw=$(printf '<task>%s</task>\n<dialog>\n%s\n</dialog>' "$task_prompt" "$user_msgs" \
+    | claude -p --model "$MODEL" --system-prompt "$system_prompt" \
+        --output-format stream-json --verbose 2>/dev/null \
+    | jq -r 'select(.type == "assistant") | .message.content[]? | select(.type == "text") | .text' 2>/dev/null \
+    | tail -1 || true)
+
+  # Sanity check: multi-line or very long response means model is chatting, not titling
+  if [[ $(printf '%s' "$title_raw" | wc -l) -gt 2 ]] || [[ ${#title_raw} -gt 200 ]]; then
+    log "Title sanity check failed: lines=$(printf '%s' "$title_raw" | wc -l) len=${#title_raw}"
+    return 1
+  fi
+
+  [[ -z "$title_raw" ]] && return 1
+  echo "$title_raw"
+}
+
+# ── Title Post-Processing ──
+
+clean_title() {
+  local raw="$1"
+  printf '%s' "$raw" | tr -d '\n' \
+    | sed 's/^[[:space:]]*//' \
+    | sed 's/^[Tt]itle[：:][[:space:]]*//' \
+    | sed 's/^[Ss]ession [Tt]itle[：:][[:space:]]*//' \
+    | sed 's/^标题[：:][[:space:]]*//' \
+    | sed 's/^会话标题[：:][[:space:]]*//' \
+    | sed 's/^タイトル[：:][[:space:]]*//' \
+    | sed 's/^제목[：:][[:space:]]*//' \
+    | sed 's/^["'"'"'「《]//; s/["'"'"'」》]$//' \
+    | sed 's/[。！？，、；：.!?,;:]$//' \
+    | cut -c1-60
+}
+
+# ── Write Title to Transcript ──
+
+write_title() {
+  local transcript="$1"
+  local title="$2"
+  local session_id="$3"
+
+  get_file_times "$transcript"
+
+  local record
+  record=$(jq -nc --arg title "$title" --arg sid "$session_id" \
+    '{type: "custom-title", customTitle: $title, sessionId: $sid}')
+  echo "$record" >> "$transcript"
+
+  restore_file_times "$transcript"
+  log "Title written: '$title'"
+}
