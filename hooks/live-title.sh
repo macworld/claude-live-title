@@ -14,19 +14,22 @@ TRANSCRIPT_PATH=$(echo "$INPUT" | jq -r '.transcript_path // empty')
 
 [[ -z "$SESSION_ID" || -z "$TRANSCRIPT_PATH" || ! -f "$TRANSCRIPT_PATH" ]] && exit 0
 
+SAFE_ID=$(sanitize_session_id "$SESSION_ID")
+[[ -z "$SAFE_ID" ]] && exit 0
+
 load_config
-log "live-title triggered: session=$SESSION_ID"
+log "live-title triggered: session=$SESSION_ID (safe=$SAFE_ID)"
 
 # ── Check live update switch ──
 [[ "$LIVE_UPDATE" != "true" ]] && { log "Live update disabled"; exit 0; }
 
 # ── Count user messages ──
-TOTAL_MSGS=$(grep '"type":"user"' "$TRANSCRIPT_PATH" 2>/dev/null | grep -vc '"type":"progress"' || echo 0)
+TOTAL_MSGS=$(jq -c 'select(.type == "user")' "$TRANSCRIPT_PATH" 2>/dev/null | wc -l || echo 0)
 [[ "$TOTAL_MSGS" -eq 0 ]] && exit 0
 
 # ── Throttle check ──
 NOW=$(date +%s)
-STATE_FILE="/tmp/claude-live-title-state-${SESSION_ID}"
+STATE_FILE="/tmp/claude-live-title-state-${SAFE_ID}"
 
 if [[ -f "$STATE_FILE" ]]; then
   if read -r LAST_TIME LAST_COUNT < "$STATE_FILE" 2>/dev/null \
@@ -45,7 +48,7 @@ fi
 # No state file = first run in this session, proceed immediately
 
 # ── Acquire lock ──
-LOCK_DIR="/tmp/claude-live-title-lock-${SESSION_ID}"
+LOCK_DIR="/tmp/claude-live-title-lock-${SAFE_ID}"
 acquire_lock "$LOCK_DIR" || exit 0
 trap 'release_lock "$LOCK_DIR"' EXIT
 

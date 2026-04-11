@@ -5,6 +5,9 @@
 > 将随机 slug（如 `elegant-chasing-eich`）替换为真正的标题，
 > 比如「重构用户认证模块」或「修复分页接口Bug」。
 
+[![License](https://img.shields.io/github/license/macworld/claude-live-title)](LICENSE)
+[![Stars](https://img.shields.io/github/stars/macworld/claude-live-title)](https://github.com/macworld/claude-live-title/stargazers)
+
 [English](README.md) | 中文
 
 ## 特性
@@ -27,11 +30,42 @@
 
 ## 安装
 
+在 Claude Code 会话中执行：
+
+**第 1 步：添加插件源**
 ```
-/install github:macworld/claude-live-title
+/plugin marketplace add macworld/claude-live-title
 ```
 
-安装即可使用，无需任何配置。
+**第 2 步：安装插件**
+
+<details>
+<summary><strong>⚠️ Linux 用户请先看这里</strong></summary>
+
+Linux 上 `/tmp` 通常是独立的 tmpfs 文件系统，可能导致安装失败：
+```
+EXDEV: cross-device link not permitted
+```
+
+**解决方法**：安装前设置 TMPDIR：
+```bash
+mkdir -p ~/.cache/tmp && TMPDIR=~/.cache/tmp claude
+```
+
+然后在该会话中执行下面的安装命令。
+
+</details>
+
+```
+/plugin install claude-live-title
+```
+
+**第 3 步：重载并重启**
+```
+/reload-plugins
+```
+
+重启 Claude Code 以激活 hook。插件开箱即用，无需任何配置。
 
 ## 配置
 
@@ -58,8 +92,9 @@
   // 可设为 "zh"、"en"、"ja"、"ko" 等指定语言
   "language": "auto",
 
-  // 标题最大字符数（默认：20）
-  "maxLength": 20,
+  // 目标标题显示列宽，传给 AI 的 prompt 参数（默认：30）
+  // CJK 字符算 2 列，拉丁字符算 1 列
+  "maxLength": 30,
 
   // 实时更新最小间隔秒数（默认：300）
   "throttleInterval": 300,
@@ -99,8 +134,10 @@
 1. 安装两个插件：
 
    ```
-   /install github:macworld/claude-live-title
-   /install github:jarrodwatts/claude-hud
+   /plugin marketplace add macworld/claude-live-title
+   /plugin install claude-live-title
+   /plugin marketplace add jarrodwatts/claude-hud
+   /plugin install claude-hud
    ```
 
 2. 在 HUD 中启用会话名称显示（默认关闭）：
@@ -144,6 +181,18 @@ claude-live-title 将 `custom-title` 记录写入会话 transcript 文件。Clau
 
 **更新太频繁或太少？**
 调整配置中的 `throttleInterval`（秒）和 `throttleMessages`（消息数）。
+
+## 开发
+
+```bash
+git clone https://github.com/macworld/claude-live-title
+cd claude-live-title
+
+# 从源码目录加载插件进行开发
+claude --plugin-dir .
+```
+
+本地开发时，`--plugin-dir` 直接从工作目录加载插件，无需安装或缓存。修改 hook 需要重启会话；修改 command/skill 可用 `/reload-plugins` 热重载。
 
 ## 许可证
 

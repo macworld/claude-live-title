@@ -14,19 +14,22 @@ TRANSCRIPT_PATH=$(echo "$INPUT" | jq -r '.transcript_path // empty')
 
 [[ -z "$SESSION_ID" || -z "$TRANSCRIPT_PATH" || ! -f "$TRANSCRIPT_PATH" ]] && exit 0
 
+SAFE_ID=$(sanitize_session_id "$SESSION_ID")
+[[ -z "$SAFE_ID" ]] && exit 0
+
 load_config
-log "stop-title triggered: session=$SESSION_ID"
+log "stop-title triggered: session=$SESSION_ID (safe=$SAFE_ID)"
 
 # ── Dedup: skip if already named by this Stop hook ──
-MARKER="/tmp/claude-live-title-named-${SESSION_ID}"
+MARKER="/tmp/claude-live-title-named-${SAFE_ID}"
 [[ -f "$MARKER" ]] && { log "Already named (marker exists)"; exit 0; }
 
 # ── Skip if live hook already wrote a custom-title ──
-if tail -c 65536 "$TRANSCRIPT_PATH" | grep -q '"type":"custom-title"'; then
+if grep -q '"type":"custom-title"' "$TRANSCRIPT_PATH" 2>/dev/null; then
   touch "$MARKER"
   log "Already named (custom-title found in transcript)"
-  rm -f "/tmp/claude-live-title-state-${SESSION_ID}"
-  rm -rf "/tmp/claude-live-title-lock-${SESSION_ID}"
+  rm -f "/tmp/claude-live-title-state-${SAFE_ID}"
+  rm -rf "/tmp/claude-live-title-lock-${SAFE_ID}"
   exit 0
 fi
 
@@ -58,5 +61,5 @@ write_title "$TRANSCRIPT_PATH" "$TITLE" "$SESSION_ID"
 log "Stop hook: title written"
 
 # ── Clean up live hook temp files ──
-rm -f "/tmp/claude-live-title-state-${SESSION_ID}"
-rm -rf "/tmp/claude-live-title-lock-${SESSION_ID}"
+rm -f "/tmp/claude-live-title-state-${SAFE_ID}"
+rm -rf "/tmp/claude-live-title-lock-${SAFE_ID}"

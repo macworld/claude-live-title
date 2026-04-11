@@ -8,10 +8,21 @@ HEAD_MESSAGES=3
 TAIL_MESSAGES=5
 DEBUG_LOG="/tmp/claude-live-title-debug.log"
 
+# ── Session ID Sanitization ──
+# Derive a filesystem-safe key from session_id via SHA-256 (collision-free)
+sanitize_session_id() {
+  local raw="$1"
+  if command -v sha256sum >/dev/null 2>&1; then
+    printf '%s' "$raw" | sha256sum | cut -d' ' -f1
+  else
+    printf '%s' "$raw" | shasum -a 256 | cut -d' ' -f1
+  fi
+}
+
 # ── Config Defaults (overridden by load_config) ──
 MODEL="haiku"
 LANGUAGE="auto"
-MAX_LENGTH=20
+MAX_LENGTH=30
 THROTTLE_INTERVAL=300
 THROTTLE_MESSAGES=3
 LIVE_UPDATE=true
@@ -37,13 +48,25 @@ log() {
 load_config() {
   local config_file="$HOME/.claude/plugins/claude-live-title/config.json"
   if [[ -f "$config_file" ]]; then
-    MODEL=$(jq -r '.model // "haiku"' "$config_file")
-    LANGUAGE=$(jq -r '.language // "auto"' "$config_file")
-    MAX_LENGTH=$(jq -r '.maxLength // 20' "$config_file")
-    THROTTLE_INTERVAL=$(jq -r '.throttleInterval // 300' "$config_file")
-    THROTTLE_MESSAGES=$(jq -r '.throttleMessages // 3' "$config_file")
-    LIVE_UPDATE=$(jq -r '.liveUpdate // true' "$config_file")
-    DEBUG=$(jq -r '.debug // false' "$config_file")
+    local parsed
+    parsed=$(jq '.' "$config_file" 2>/dev/null) || { log "Config parse failed, using defaults"; return 0; }
+
+    MODEL=$(echo "$parsed" | jq -r '.model // "haiku"')
+    LANGUAGE=$(echo "$parsed" | jq -r '.language // "auto"')
+    MAX_LENGTH=$(echo "$parsed" | jq -r '.maxLength // 30')
+    THROTTLE_INTERVAL=$(echo "$parsed" | jq -r '.throttleInterval // 300')
+    THROTTLE_MESSAGES=$(echo "$parsed" | jq -r '.throttleMessages // 3')
+    LIVE_UPDATE=$(echo "$parsed" | jq -r '.liveUpdate // true')
+    DEBUG=$(echo "$parsed" | jq -r '.debug // false')
+
+    # Validate numeric fields — fall back to defaults if not integers
+    [[ "$MAX_LENGTH" =~ ^[0-9]+$ ]] || MAX_LENGTH=30
+    [[ "$THROTTLE_INTERVAL" =~ ^[0-9]+$ ]] || THROTTLE_INTERVAL=300
+    [[ "$THROTTLE_MESSAGES" =~ ^[0-9]+$ ]] || THROTTLE_MESSAGES=3
+
+    # Validate boolean fields — fall back to defaults if not true/false
+    [[ "$LIVE_UPDATE" == "true" || "$LIVE_UPDATE" == "false" ]] || LIVE_UPDATE=true
+    [[ "$DEBUG" == "true" || "$DEBUG" == "false" ]] || DEBUG=false
   fi
   log "Config loaded: model=$MODEL lang=$LANGUAGE maxLen=$MAX_LENGTH throttle=${THROTTLE_INTERVAL}s/${THROTTLE_MESSAGES}msgs live=$LIVE_UPDATE"
 }
@@ -134,9 +157,9 @@ release_lock() {
 extract_user_messages() {
   local transcript="$1"
 
-  # Get all real user message lines (exclude progress records that embed user messages)
+  # Get all real user message lines — use jq to match top-level .type only
   local all_user_lines
-  all_user_lines=$(grep '"type":"user"' "$transcript" 2>/dev/null | grep -v '"type":"progress"' || true)
+  all_user_lines=$(jq -c 'select(.type == "user")' "$transcript" 2>/dev/null || true)
   [[ -z "$all_user_lines" ]] && return 1
 
   # Sample: first N + last N, deduplicated preserving order
@@ -173,7 +196,7 @@ generate_title() {
 
   local task_prompt
   if [[ "$LANGUAGE" == "auto" ]]; then
-    task_prompt="Generate a short title (max ${MAX_LENGTH} characters) for the following conversation. Use the same language the user is writing in."
+    task_prompt="Generate a concise title within ${MAX_LENGTH} display columns for the following conversation. CJK characters count as 2 columns, Latin characters as 1. Be brief but descriptive. Use the same language the user is writing in."
   else
     local lang_name
     case "$LANGUAGE" in
@@ -186,7 +209,7 @@ generate_title() {
       es) lang_name="Spanish" ;;
       *)  lang_name="$LANGUAGE" ;;
     esac
-    task_prompt="Generate a short title (max ${MAX_LENGTH} characters) for the following conversation. Write the title in ${lang_name}."
+    task_prompt="Generate a concise title within ${MAX_LENGTH} display columns for the following conversation. CJK characters count as 2 columns, Latin characters as 1. Be brief but descriptive. Write the title in ${lang_name}."
   fi
 
   log "Generating title: model=$MODEL language=$LANGUAGE"
@@ -212,6 +235,9 @@ generate_title() {
 
 clean_title() {
   local raw="$1"
+  # Strip prefixes, quotes, trailing punctuation.
+  # Length is controlled by the AI prompt + generate_title sanity check (200 chars),
+  # so no hard truncation here — avoids locale-dependent cut -c issues with CJK.
   printf '%s' "$raw" | tr -d '\n' \
     | sed 's/^[[:space:]]*//' \
     | sed 's/^[Tt]itle[：:][[:space:]]*//' \
@@ -222,8 +248,7 @@ clean_title() {
     | sed 's/^제목[：:][[:space:]]*//' \
     | sed 's/^["'"'"'「《]//; s/["'"'"'」》]$//' \
     | sed 's/[。！？，、；：.!?,;:]$//' \
-    | sed 's/[[:space:]]*$//' \
-    | cut -c1-60
+    | sed 's/[[:space:]]*$//'
 }
 
 # ── Write Title to Transcript ──
