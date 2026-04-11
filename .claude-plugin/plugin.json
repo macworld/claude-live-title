@@ -4,6 +4,7 @@
   "version": "0.1.0",
   "author": {
     "name": "macworld",
+    "email": "lwh.scu@gmail.com",
     "url": "https://github.com/macworld"
   },
   "hooks": "./hooks/hooks.json",
