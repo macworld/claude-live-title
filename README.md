@@ -3,7 +3,9 @@
 Auto-generate meaningful session titles for Claude Code in real-time.
 
 > Replace random slugs like `elegant-chasing-eich` with actual titles
-> like "重构用户认证模块" or "Fix pagination bug in API".
+> like "Fix pagination bug in API" or "Refactor auth middleware".
+
+English | [中文](README_ZH.md)
 
 ## Features
 
@@ -78,15 +80,15 @@ Or edit the config file directly:
 
 By default (`"auto"`), the plugin detects the language of your conversation and generates titles in the same language. This works well for most single-language conversations.
 
-If you code in English but want titles in another language (e.g., Chinese), set the language explicitly:
+If you always want titles in a specific language regardless of conversation language, set it explicitly:
 
 ```json
 {
-  "language": "zh"
+  "language": "en"
 }
 ```
 
-> **Note:** In mixed-language conversations (e.g., Chinese task descriptions with English code), auto-detection may occasionally pick the wrong language. If consistent title language is important to you, set it explicitly.
+> **Note:** In mixed-language conversations (e.g., task descriptions in one language with code and error messages in English), auto-detection may occasionally pick the wrong language. If consistent title language is important to you, set it explicitly.
 
 ## Using with Claude HUD
 
