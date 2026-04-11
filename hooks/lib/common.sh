@@ -4,8 +4,6 @@
 
 # ── Internal Constants ──
 MAX_INPUT_CHARS=8000
-HEAD_MESSAGES=3
-TAIL_MESSAGES=5
 DEBUG_LOG="/tmp/claude-live-title-debug.log"
 
 # ── Session ID Sanitization ──
@@ -23,8 +21,9 @@ sanitize_session_id() {
 MODEL="haiku"
 LANGUAGE="auto"
 MAX_LENGTH=30
-THROTTLE_INTERVAL=300
-THROTTLE_MESSAGES=3
+CONTEXT_MESSAGES=8
+THROTTLE_INTERVAL=240
+THROTTLE_MESSAGES=2
 LIVE_UPDATE=true
 DEBUG=false
 
@@ -54,21 +53,28 @@ load_config() {
     MODEL=$(echo "$parsed" | jq -r '.model // "haiku"')
     LANGUAGE=$(echo "$parsed" | jq -r '.language // "auto"')
     MAX_LENGTH=$(echo "$parsed" | jq -r '.maxLength // 30')
-    THROTTLE_INTERVAL=$(echo "$parsed" | jq -r '.throttleInterval // 300')
-    THROTTLE_MESSAGES=$(echo "$parsed" | jq -r '.throttleMessages // 3')
+    CONTEXT_MESSAGES=$(echo "$parsed" | jq -r '.contextMessages // 8')
+    THROTTLE_INTERVAL=$(echo "$parsed" | jq -r '.throttleInterval // 240')
+    THROTTLE_MESSAGES=$(echo "$parsed" | jq -r '.throttleMessages // 2')
     LIVE_UPDATE=$(echo "$parsed" | jq -r '.liveUpdate // true')
     DEBUG=$(echo "$parsed" | jq -r '.debug // false')
 
     # Validate numeric fields — fall back to defaults if not integers
     [[ "$MAX_LENGTH" =~ ^[0-9]+$ ]] || MAX_LENGTH=30
-    [[ "$THROTTLE_INTERVAL" =~ ^[0-9]+$ ]] || THROTTLE_INTERVAL=300
-    [[ "$THROTTLE_MESSAGES" =~ ^[0-9]+$ ]] || THROTTLE_MESSAGES=3
+    [[ "$CONTEXT_MESSAGES" =~ ^[0-9]+$ ]] || CONTEXT_MESSAGES=8
+    [[ "$THROTTLE_INTERVAL" =~ ^[0-9]+$ ]] || THROTTLE_INTERVAL=240
+    [[ "$THROTTLE_MESSAGES" =~ ^[0-9]+$ ]] || THROTTLE_MESSAGES=2
 
     # Validate boolean fields — fall back to defaults if not true/false
     [[ "$LIVE_UPDATE" == "true" || "$LIVE_UPDATE" == "false" ]] || LIVE_UPDATE=true
     [[ "$DEBUG" == "true" || "$DEBUG" == "false" ]] || DEBUG=false
   fi
-  log "Config loaded: model=$MODEL lang=$LANGUAGE maxLen=$MAX_LENGTH throttle=${THROTTLE_INTERVAL}s/${THROTTLE_MESSAGES}msgs live=$LIVE_UPDATE"
+  # Compute head/tail split from contextMessages (≈3:5 ratio)
+  HEAD_MESSAGES=$(( CONTEXT_MESSAGES * 3 / 8 ))
+  [[ "$HEAD_MESSAGES" -lt 1 && "$CONTEXT_MESSAGES" -ge 2 ]] && HEAD_MESSAGES=1
+  TAIL_MESSAGES=$(( CONTEXT_MESSAGES - HEAD_MESSAGES ))
+
+  log "Config loaded: model=$MODEL lang=$LANGUAGE maxLen=$MAX_LENGTH ctx=${CONTEXT_MESSAGES}(h${HEAD_MESSAGES}+t${TAIL_MESSAGES}) throttle=${THROTTLE_INTERVAL}s/${THROTTLE_MESSAGES}msgs live=$LIVE_UPDATE"
 }
 
 # ── Cross-Platform File Timestamps ──
@@ -196,7 +202,7 @@ generate_title() {
 
   local task_prompt
   if [[ "$LANGUAGE" == "auto" ]]; then
-    task_prompt="Generate a concise title within ${MAX_LENGTH} display columns for the following conversation. CJK characters count as 2 columns, Latin characters as 1. Be brief but descriptive. Use the same language the user is writing in."
+    task_prompt="Generate a concise title within ${MAX_LENGTH} display columns for the following conversation. CJK characters count as 2 columns, Latin characters as 1. Be brief but descriptive. The messages are in chronological order; focus more on the latest messages as they reflect the current direction. Use the same language the user is writing in."
   else
     local lang_name
     case "$LANGUAGE" in
@@ -209,7 +215,7 @@ generate_title() {
       es) lang_name="Spanish" ;;
       *)  lang_name="$LANGUAGE" ;;
     esac
-    task_prompt="Generate a concise title within ${MAX_LENGTH} display columns for the following conversation. CJK characters count as 2 columns, Latin characters as 1. Be brief but descriptive. Write the title in ${lang_name}."
+    task_prompt="Generate a concise title within ${MAX_LENGTH} display columns for the following conversation. CJK characters count as 2 columns, Latin characters as 1. Be brief but descriptive. The messages are in chronological order; focus more on the latest messages as they reflect the current direction. Write the title in ${lang_name}."
   fi
 
   log "Generating title: model=$MODEL language=$LANGUAGE"
