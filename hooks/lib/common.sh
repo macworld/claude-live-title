@@ -128,3 +128,39 @@ release_lock() {
     log "Lock released: $lock_dir"
   fi
 }
+
+# ── Message Extraction ──
+
+extract_user_messages() {
+  local transcript="$1"
+
+  # Get all real user message lines (exclude progress records that embed user messages)
+  local all_user_lines
+  all_user_lines=$(grep '"type":"user"' "$transcript" 2>/dev/null | grep -v '"type":"progress"' || true)
+  [[ -z "$all_user_lines" ]] && return 1
+
+  # Sample: first N + last N, deduplicated preserving order
+  local first_lines last_lines selected
+  first_lines=$(echo "$all_user_lines" | head -"$HEAD_MESSAGES")
+  last_lines=$(echo "$all_user_lines" | tail -"$TAIL_MESSAGES")
+  selected=$(printf '%s\n%s' "$first_lines" "$last_lines" | awk '!seen[$0]++')
+
+  # Extract text content, filter system noise, truncate
+  local msgs
+  msgs=$(echo "$selected" | jq -r '
+    if (.message.content | type) == "string" then
+      .message.content
+    elif (.message.content | type) == "array" then
+      [.message.content[] | select(.type == "text") | .text] | join(" ")
+    else
+      empty
+    end
+  ' 2>/dev/null \
+    | sed '/<system-reminder>/d; /<\/system-reminder>/d' \
+    | grep -v '^<command-' | grep -v '^<local-command' \
+    | sed '/^[[:space:]]*$/d' \
+    | head -c "$MAX_INPUT_CHARS")
+
+  [[ -z "$msgs" ]] && return 1
+  echo "$msgs"
+}
