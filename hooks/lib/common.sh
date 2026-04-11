@@ -47,3 +47,84 @@ load_config() {
   fi
   log "Config loaded: model=$MODEL lang=$LANGUAGE maxLen=$MAX_LENGTH throttle=${THROTTLE_INTERVAL}s/${THROTTLE_MESSAGES}msgs live=$LIVE_UPDATE"
 }
+
+# ── Cross-Platform File Timestamps ──
+
+get_mtime() {
+  local file="$1"
+  if [[ "$IS_MACOS" == "true" ]]; then
+    stat -f %m "$file" 2>/dev/null || echo 0
+  else
+    stat -c %Y "$file" 2>/dev/null || echo 0
+  fi
+}
+
+get_atime() {
+  local file="$1"
+  if [[ "$IS_MACOS" == "true" ]]; then
+    stat -f %a "$file" 2>/dev/null || echo 0
+  else
+    stat -c %X "$file" 2>/dev/null || echo 0
+  fi
+}
+
+get_file_times() {
+  local file="$1"
+  ORIG_ATIME=$(get_atime "$file")
+  ORIG_MTIME=$(get_mtime "$file")
+  log "Saved timestamps: atime=$ORIG_ATIME mtime=$ORIG_MTIME"
+}
+
+restore_file_times() {
+  local file="$1"
+  if [[ "$IS_MACOS" == "true" ]]; then
+    local atime_fmt mtime_fmt
+    atime_fmt=$(date -r "$ORIG_ATIME" '+%Y%m%d%H%M.%S' 2>/dev/null) || return 0
+    mtime_fmt=$(date -r "$ORIG_MTIME" '+%Y%m%d%H%M.%S' 2>/dev/null) || return 0
+    touch -a -t "$atime_fmt" "$file" 2>/dev/null || true
+    touch -m -t "$mtime_fmt" "$file" 2>/dev/null || true
+  else
+    touch -a -d "@${ORIG_ATIME}" "$file" 2>/dev/null || true
+    touch -m -d "@${ORIG_MTIME}" "$file" 2>/dev/null || true
+  fi
+  log "Restored timestamps for $file"
+}
+
+# ── Locking (mkdir-based, cross-platform) ──
+
+LOCK_ACQUIRED=false
+
+acquire_lock() {
+  local lock_dir="$1"
+  if mkdir "$lock_dir" 2>/dev/null; then
+    echo $$ > "$lock_dir/pid"
+    LOCK_ACQUIRED=true
+    log "Lock acquired: $lock_dir"
+    return 0
+  fi
+  # Stale lock recovery: if lock is older than 60s, it's stale
+  # (hook timeout is 30s, so 2x is a safe margin)
+  local lock_age
+  lock_age=$(( $(date +%s) - $(get_mtime "$lock_dir") ))
+  if [[ "$lock_age" -gt 60 ]]; then
+    log "Stale lock detected (${lock_age}s old), removing: $lock_dir"
+    rm -rf "$lock_dir"
+    if mkdir "$lock_dir" 2>/dev/null; then
+      echo $$ > "$lock_dir/pid"
+      LOCK_ACQUIRED=true
+      log "Lock acquired after stale recovery: $lock_dir"
+      return 0
+    fi
+  fi
+  log "Lock busy: $lock_dir"
+  return 1
+}
+
+release_lock() {
+  local lock_dir="$1"
+  if [[ "$LOCK_ACQUIRED" == "true" ]]; then
+    rm -rf "$lock_dir"
+    LOCK_ACQUIRED=false
+    log "Lock released: $lock_dir"
+  fi
+}
