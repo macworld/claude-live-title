@@ -1,7 +1,8 @@
 {
   "name": "claude-live-title",
   "owner": {
-    "name": "macworld"
+    "name": "macworld",
+    "email": "lwh.scu@gmail.com"
   },
   "metadata": {
     "description": "Auto-generate meaningful session titles in real-time",
@@ -13,7 +14,7 @@
       "source": "./",
       "description": "Auto-generate meaningful session titles in real-time, replacing random slugs. Multilingual support with smart throttling.",
       "category": "productivity",
-      "tags": ["title", "session", "rename", "live-update", "multilingual"]
+      "tags": ["title", "session", "rename", "live-update", "multilingual", "statusline", "claude-code"]
     }
   ]
 }

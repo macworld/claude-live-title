@@ -1,6 +1,7 @@
 ---
-description: View or update claude-live-title configuration
-allowed-tools: Bash, Read, Edit, Write, AskUserQuestion
+name: config
+description: "Use when the user asks to \"view claude-live-title settings\", \"change title language\", \"configure live title\", \"adjust throttle interval\", or \"update claude-live-title config\". Manage plugin configuration for session title generation."
+allowed-tools: ["Bash", "Read", "Edit", "Write", "AskUserQuestion"]
 ---
 
 # claude-live-title Configuration
@@ -17,7 +18,7 @@ Help the user view or modify their claude-live-title plugin configuration.
 |-------|------|---------|-------------|
 | model | string | "haiku" | Model used for title generation (e.g., "haiku", "sonnet") |
 | language | string | "auto" | Title language: "auto" (detect from conversation), "zh", "en", "ja", "ko", etc. |
-| maxLength | number | 20 | Maximum title length in characters (controls the prompt, not a hard cut) |
+| maxLength | number | 30 | Target title length in display columns (CJK=2, Latin=1), passed to the AI prompt |
 | throttleInterval | number | 300 | Minimum seconds between live title updates |
 | throttleMessages | number | 3 | Minimum new user messages before live title update |
 | liveUpdate | boolean | true | Enable real-time title updates during conversation. When false, titles are only generated when the session ends. |
