@@ -80,7 +80,7 @@ mkdir -p ~/.cache/tmp && TMPDIR=~/.cache/tmp claude
 或直接编辑配置文件：
 
 ```
-~/.claude/plugins/claude-live-title/config.json
+~/.claude/plugins/data/claude-live-title/config.json
 ```
 
 ```jsonc

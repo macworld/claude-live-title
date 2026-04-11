@@ -11,7 +11,9 @@ Help the user view or modify their claude-live-title plugin configuration.
 
 ## Config file location
 
-`~/.claude/plugins/claude-live-title/config.json`
+`${CLAUDE_PLUGIN_DATA}/config.json` (typically `~/.claude/plugins/data/claude-live-title/config.json`)
+
+> Legacy path `~/.claude/plugins/claude-live-title/config.json` is auto-migrated on first load.
 
 ## Available settings
 
@@ -30,7 +32,7 @@ Help the user view or modify their claude-live-title plugin configuration.
 
 1. Read the current config file. If it does not exist, show the default values and offer to create it.
 2. Ask the user which setting they want to change.
-3. Update the config file, creating the directory and file if needed.
+3. Update the config file, creating the directory and file if needed. Use `${CLAUDE_PLUGIN_DATA}/config.json` as the path; fall back to `~/.claude/plugins/claude-live-title/config.json` if `CLAUDE_PLUGIN_DATA` is not set.
 4. Show the updated configuration and confirm the changes.
 
 ## Notes

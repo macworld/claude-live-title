@@ -45,7 +45,17 @@ log() {
 
 # ── Config Loading ──
 load_config() {
-  local config_file="$HOME/.claude/plugins/claude-live-title/config.json"
+  local config_dir="${CLAUDE_PLUGIN_DATA:-$HOME/.claude/plugins/claude-live-title}"
+  local config_file="$config_dir/config.json"
+
+  # Migrate from legacy path if needed
+  local legacy_file="$HOME/.claude/plugins/claude-live-title/config.json"
+  if [[ ! -f "$config_file" && -f "$legacy_file" && "$config_file" != "$legacy_file" ]]; then
+    mkdir -p "$config_dir"
+    cp "$legacy_file" "$config_file"
+    log "Migrated config from $legacy_file to $config_file"
+  fi
+
   if [[ -f "$config_file" ]]; then
     local parsed
     parsed=$(jq '.' "$config_file" 2>/dev/null) || { log "Config parse failed, using defaults"; return 0; }

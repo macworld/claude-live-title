@@ -80,7 +80,7 @@ Use the slash command to configure interactively:
 Or edit the config file directly:
 
 ```
-~/.claude/plugins/claude-live-title/config.json
+~/.claude/plugins/data/claude-live-title/config.json
 ```
 
 ```jsonc

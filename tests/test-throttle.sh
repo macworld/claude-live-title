@@ -21,7 +21,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "$SCRIPT_DIR/hooks/lib/common.sh"
 detect_platform
 
-CONFIG="$HOME/.claude/plugins/claude-live-title/config.json"
+CONFIG="${CLAUDE_PLUGIN_DATA:-$HOME/.claude/plugins/claude-live-title}/config.json"
 mkdir -p "$(dirname "$CONFIG")"
 ORIG_CONFIG=""
 [[ -f "$CONFIG" ]] && ORIG_CONFIG=$(cat "$CONFIG")

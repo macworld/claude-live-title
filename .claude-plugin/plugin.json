@@ -7,7 +7,6 @@
     "email": "lwh.scu@gmail.com",
     "url": "https://github.com/macworld"
   },
-  "hooks": "./hooks/hooks.json",
   "homepage": "https://github.com/macworld/claude-live-title",
   "repository": "https://github.com/macworld/claude-live-title",
   "license": "MIT",

@@ -8,7 +8,7 @@ Claude Code plugin: auto-generate meaningful session titles in real-time.
 - Shared logic lives in hooks/lib/common.sh, entry scripts stay thin
 - Zero runtime dependencies: only bash + jq + `claude -p`
 - All hooks must use `async: true`, never block the user
-- Config location: ~/.claude/plugins/claude-live-title/config.json
+- Config location: ${CLAUDE_PLUGIN_DATA}/config.json (fallback: ~/.claude/plugins/claude-live-title/config.json)
 
 ## Testing
 
