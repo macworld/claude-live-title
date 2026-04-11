@@ -97,7 +97,7 @@ LOCK_ACQUIRED=false
 acquire_lock() {
   local lock_dir="$1"
   if mkdir "$lock_dir" 2>/dev/null; then
-    echo $$ > "$lock_dir/pid"
+    echo "$$" > "$lock_dir/pid"
     LOCK_ACQUIRED=true
     log "Lock acquired: $lock_dir"
     return 0
@@ -110,7 +110,7 @@ acquire_lock() {
     log "Stale lock detected (${lock_age}s old), removing: $lock_dir"
     rm -rf "$lock_dir"
     if mkdir "$lock_dir" 2>/dev/null; then
-      echo $$ > "$lock_dir/pid"
+      echo "$$" > "$lock_dir/pid"
       LOCK_ACQUIRED=true
       log "Lock acquired after stale recovery: $lock_dir"
       return 0
@@ -222,6 +222,7 @@ clean_title() {
     | sed 's/^제목[：:][[:space:]]*//' \
     | sed 's/^["'"'"'「《]//; s/["'"'"'」》]$//' \
     | sed 's/[。！？，、；：.!?,;:]$//' \
+    | sed 's/[[:space:]]*$//' \
     | cut -c1-60
 }
 
