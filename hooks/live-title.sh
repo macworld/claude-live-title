@@ -1,0 +1,68 @@
+#!/usr/bin/env bash
+# live-title.sh — PreToolUse hook entry point
+# Generates/updates session title in real-time with throttling.
+set -eu
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${SCRIPT_DIR}/lib/common.sh"
+
+# ── Initialize ──
+detect_platform
+INPUT=$(cat)
+SESSION_ID=$(echo "$INPUT" | jq -r '.session_id // empty')
+TRANSCRIPT_PATH=$(echo "$INPUT" | jq -r '.transcript_path // empty')
+
+[[ -z "$SESSION_ID" || -z "$TRANSCRIPT_PATH" || ! -f "$TRANSCRIPT_PATH" ]] && exit 0
+
+load_config
+log "live-title triggered: session=$SESSION_ID"
+
+# ── Check live update switch ──
+[[ "$LIVE_UPDATE" != "true" ]] && { log "Live update disabled"; exit 0; }
+
+# ── Count user messages ──
+TOTAL_MSGS=$(grep '"type":"user"' "$TRANSCRIPT_PATH" 2>/dev/null | grep -vc '"type":"progress"' || echo 0)
+[[ "$TOTAL_MSGS" -eq 0 ]] && exit 0
+
+# ── Throttle check ──
+NOW=$(date +%s)
+STATE_FILE="/tmp/claude-live-title-state-${SESSION_ID}"
+
+if [[ -f "$STATE_FILE" ]]; then
+  if read -r LAST_TIME LAST_COUNT < "$STATE_FILE" 2>/dev/null \
+     && [[ -n "$LAST_TIME" && -n "$LAST_COUNT" ]]; then
+    ELAPSED=$(( NOW - LAST_TIME ))
+    NEW_MSGS=$(( TOTAL_MSGS - LAST_COUNT ))
+    if [[ "$ELAPSED" -lt "$THROTTLE_INTERVAL" || "$NEW_MSGS" -lt "$THROTTLE_MESSAGES" ]]; then
+      log "Throttled: elapsed=${ELAPSED}s new_msgs=${NEW_MSGS}"
+      exit 0
+    fi
+  else
+    # Corrupted state file, remove and treat as first run
+    rm -f "$STATE_FILE"
+  fi
+fi
+# No state file = first run in this session, proceed immediately
+
+# ── Acquire lock ──
+LOCK_DIR="/tmp/claude-live-title-lock-${SESSION_ID}"
+acquire_lock "$LOCK_DIR" || exit 0
+trap 'release_lock "$LOCK_DIR"' EXIT
+
+# ── Extract, generate, write ──
+USER_MSGS=$(extract_user_messages "$TRANSCRIPT_PATH") || exit 0
+[[ -z "$USER_MSGS" ]] && exit 0
+
+TITLE_RAW=$(generate_title "$USER_MSGS") || { log "Title generation failed"; exit 0; }
+TITLE=$(clean_title "$TITLE_RAW")
+
+if [[ -z "$TITLE" ]]; then
+  log "Title empty after cleanup"
+  exit 0
+fi
+
+write_title "$TRANSCRIPT_PATH" "$TITLE" "$SESSION_ID"
+
+# ── Update state AFTER successful generation ──
+echo "$NOW $TOTAL_MSGS" > "$STATE_FILE"
+log "State updated: time=$NOW msgs=$TOTAL_MSGS"
