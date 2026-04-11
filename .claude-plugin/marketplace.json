@@ -1,0 +1,19 @@
+{
+  "name": "claude-live-title",
+  "owner": {
+    "name": "macworld"
+  },
+  "metadata": {
+    "description": "Auto-generate meaningful session titles in real-time",
+    "version": "0.1.0"
+  },
+  "plugins": [
+    {
+      "name": "claude-live-title",
+      "source": "./",
+      "description": "Auto-generate meaningful session titles in real-time, replacing random slugs. Multilingual support with smart throttling.",
+      "category": "productivity",
+      "tags": ["title", "session", "rename", "live-update", "multilingual"]
+    }
+  ]
+}

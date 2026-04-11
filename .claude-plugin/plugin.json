@@ -1,0 +1,15 @@
+{
+  "name": "claude-live-title",
+  "description": "Auto-generate meaningful session titles in real-time, replacing random slugs. Multilingual support.",
+  "version": "0.1.0",
+  "author": {
+    "name": "macworld"
+  },
+  "commands": [
+    "./commands/config.md"
+  ],
+  "homepage": "https://github.com/macworld/claude-live-title",
+  "repository": "https://github.com/macworld/claude-live-title",
+  "license": "MIT",
+  "keywords": ["title", "rename", "session", "live", "multilingual"]
+}
