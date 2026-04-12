@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.0.4] - 2026-04-12
+
+### Fixed
+- First-prompt title not generated on brand-new sessions: `UserPromptSubmit` fires ~100ms before Claude Code creates the transcript file on turn 1 of a fresh session, so the live hook's `! -f "$TRANSCRIPT_PATH"` check silently bailed before reaching any debug log. The fix polls up to 1s for the transcript to appear (observed as `transcript_wait=1x100ms` in logs) and records the wait count in the log line so future regressions are visible. Result: turn 1 now gets a real-time title instead of falling through to the Stop-hook fallback, which previously made the title appear only starting from turn 2 with what looked like the previous turn's content.
+- Live/Stop race: if the Stop hook fired while the live hook was still calling `claude -p` (transcript did not yet contain a `custom-title`), both hooks could generate and write a title concurrently. The live hook now acquires its lock before the transcript wait, and the Stop hook defers when it sees the lock (with a 60s stale-lock recovery path).
+
 ## [1.0.3] - 2026-04-12
 
 ### Fixed

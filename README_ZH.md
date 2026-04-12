@@ -76,12 +76,9 @@ mkdir -p ~/.cache/tmp && TMPDIR=~/.cache/tmp claude
 /plugin install claude-live-title
 ```
 
-**第 3 步：重载并重启**
-```
-/reload-plugins
-```
+**第 3 步：重启 Claude Code**
 
-重启 Claude Code 以激活 hook。插件开箱即用，无需任何配置。
+Hook 只在启动时注册，必须完整重启才能生效 —— 单独执行 `/reload-plugins` 不够（该命令只能热重载 command 和 skill）。插件开箱即用，无需任何配置。
 
 ## 配置
 
@@ -215,6 +212,11 @@ claude --plugin-dir .
 ```
 
 本地开发时，`--plugin-dir` 直接从工作目录加载插件，无需安装或缓存。修改 hook 需要重启会话；修改 command/skill 可用 `/reload-plugins` 热重载。
+
+## 更多
+
+- [更新日志](CHANGELOG.md) —— 版本记录和发布说明
+- [隐私政策](PRIVACY.md) —— 本地运行范围，以及什么数据不会离开你的机器
 
 ## 许可证
 

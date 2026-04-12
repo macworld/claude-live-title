@@ -11,7 +11,7 @@ This plugin does **not** collect, store, or transmit any personal data or usage 
 - The plugin reads your local session transcript file to extract conversation messages.
 - It calls `claude -p` (Anthropic's CLI) locally to generate a short title from a sample of your messages.
 - The generated title is written back to your local session transcript file as a `custom-title` entry.
-- A local configuration file may be stored at `~/.claude/plugins/claude-live-title/config.json` containing your preferences (language, throttle settings, etc.).
+- A local configuration file may be stored at `~/.claude/plugins/data/claude-live-title/config.json` containing your preferences (language, throttle settings, etc.).
 
 ## Third-Party Services
 

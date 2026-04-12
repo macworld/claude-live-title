@@ -76,12 +76,9 @@ Then run the install command below in that session.
 /plugin install claude-live-title
 ```
 
-**Step 3: Reload and restart**
-```
-/reload-plugins
-```
+**Step 3: Restart Claude Code**
 
-Restart Claude Code to activate the hooks. The plugin works out of the box with zero configuration.
+Hooks only register at startup, so a full restart is required — `/reload-plugins` alone is not enough (that command only reloads commands and skills). The plugin works out of the box with zero configuration.
 
 ## Configuration
 
@@ -215,6 +212,11 @@ claude --plugin-dir .
 ```
 
 For local development, `--plugin-dir` loads the plugin directly from your working copy — no install or cache involved. Hook changes require a session restart; use `/reload-plugins` for command/skill changes.
+
+## More
+
+- [Changelog](CHANGELOG.md) — release notes and version history
+- [Privacy Policy](PRIVACY.md) — what runs locally and what doesn't leave your machine
 
 ## License
 
