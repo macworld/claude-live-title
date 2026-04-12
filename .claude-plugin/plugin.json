@@ -1,7 +1,7 @@
 {
   "name": "claude-live-title",
   "description": "Auto-generate meaningful session titles in real-time, replacing random slugs. Multilingual support.",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "author": {
     "name": "macworld",
     "email": "lwh.scu@gmail.com",
