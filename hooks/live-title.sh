@@ -5,6 +5,10 @@
 # typically ready before Claude finishes responding (and before HUD renders).
 set -eu
 
+# Skip when invoked by our own `claude -p` subsession — otherwise the
+# title-generation subprocess would recursively trigger this hook.
+[[ -n "${CLAUDE_LIVE_TITLE_INTERNAL:-}" ]] && exit 0
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/lib/common.sh"
 
@@ -13,6 +17,8 @@ detect_platform
 INPUT=$(cat)
 SESSION_ID=$(echo "$INPUT" | jq -r '.session_id // empty')
 TRANSCRIPT_PATH=$(echo "$INPUT" | jq -r '.transcript_path // empty')
+# UserPromptSubmit delivers the current prompt here before it's in transcript.
+PROMPT=$(echo "$INPUT" | jq -r '.prompt // empty')
 
 [[ -z "$SESSION_ID" || -z "$TRANSCRIPT_PATH" || ! -f "$TRANSCRIPT_PATH" ]] && exit 0
 
@@ -27,7 +33,9 @@ log "live-title triggered: session=$SESSION_ID (safe=$SAFE_ID)"
 
 # ── Count user messages ──
 TOTAL_MSGS=$(jq -c 'select(.type == "user")' "$TRANSCRIPT_PATH" 2>/dev/null | wc -l || echo 0)
-[[ "$TOTAL_MSGS" -eq 0 ]] && exit 0
+# On a brand-new session the transcript has no user entries yet, but we can
+# still title from $PROMPT alone. Only bail when we truly have nothing.
+[[ "$TOTAL_MSGS" -eq 0 && -z "$PROMPT" ]] && exit 0
 
 # ── Throttle check ──
 NOW=$(date +%s)
@@ -55,7 +63,7 @@ acquire_lock "$LOCK_DIR" || exit 0
 trap 'release_lock "$LOCK_DIR"' EXIT
 
 # ── Extract, generate, write ──
-USER_MSGS=$(extract_user_messages "$TRANSCRIPT_PATH") || exit 0
+USER_MSGS=$(extract_user_messages "$TRANSCRIPT_PATH" "$PROMPT") || exit 0
 [[ -z "$USER_MSGS" ]] && exit 0
 
 TITLE_RAW=$(generate_title "$USER_MSGS") || { log "Title generation failed"; exit 0; }

@@ -3,6 +3,10 @@
 # Fallback: generates title at session end if live hook didn't.
 set -eu
 
+# Skip when invoked by our own `claude -p` subsession — otherwise the
+# title-generation subprocess would recursively trigger this hook.
+[[ -n "${CLAUDE_LIVE_TITLE_INTERNAL:-}" ]] && exit 0
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/lib/common.sh"
 

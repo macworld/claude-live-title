@@ -170,34 +170,46 @@ release_lock() {
 
 extract_user_messages() {
   local transcript="$1"
+  # UserPromptSubmit fires before the prompt lands in transcript, so callers
+  # pass it in to avoid a one-turn lag (and to have any content at all on the
+  # first prompt of a fresh session).
+  local current_prompt="${2:-}"
 
-  # Get all real user message lines — use jq to match top-level .type only
+  local msgs=""
+
   local all_user_lines
   all_user_lines=$(jq -c 'select(.type == "user")' "$transcript" 2>/dev/null || true)
-  [[ -z "$all_user_lines" ]] && return 1
 
-  # Sample: first N + last N, deduplicated preserving order
-  local first_lines last_lines selected
-  first_lines=$(echo "$all_user_lines" | head -"$HEAD_MESSAGES")
-  last_lines=$(echo "$all_user_lines" | tail -"$TAIL_MESSAGES")
-  selected=$(printf '%s\n%s' "$first_lines" "$last_lines" | awk '!seen[$0]++')
+  if [[ -n "$all_user_lines" ]]; then
+    # Sample: first N + last N, deduplicated preserving order
+    local first_lines last_lines selected
+    first_lines=$(echo "$all_user_lines" | head -"$HEAD_MESSAGES")
+    last_lines=$(echo "$all_user_lines" | tail -"$TAIL_MESSAGES")
+    selected=$(printf '%s\n%s' "$first_lines" "$last_lines" | awk '!seen[$0]++')
 
-  # Extract text content, filter system noise, truncate
-  local msgs
-  msgs=$(echo "$selected" | jq -r '
-    if (.message.content | type) == "string" then
-      .message.content
-    elif (.message.content | type) == "array" then
-      [.message.content[] | select(.type == "text") | .text] | join(" ")
+    msgs=$(echo "$selected" | jq -r '
+      if (.message.content | type) == "string" then
+        .message.content
+      elif (.message.content | type) == "array" then
+        [.message.content[] | select(.type == "text") | .text] | join(" ")
+      else
+        empty
+      end
+    ' 2>/dev/null \
+      | sed '/<system-reminder>/d; /<\/system-reminder>/d' \
+      | grep -v '^<command-' | grep -v '^<local-command' \
+      | sed '/^[[:space:]]*$/d')
+  fi
+
+  if [[ -n "$current_prompt" ]]; then
+    if [[ -n "$msgs" ]]; then
+      msgs=$(printf '%s\n%s' "$msgs" "$current_prompt")
     else
-      empty
-    end
-  ' 2>/dev/null \
-    | sed '/<system-reminder>/d; /<\/system-reminder>/d' \
-    | grep -v '^<command-' | grep -v '^<local-command' \
-    | sed '/^[[:space:]]*$/d' \
-    | head -c "$MAX_INPUT_CHARS")
+      msgs="$current_prompt"
+    fi
+  fi
 
+  msgs=$(printf '%s' "$msgs" | head -c "$MAX_INPUT_CHARS")
   [[ -z "$msgs" ]] && return 1
   echo "$msgs"
 }
@@ -229,8 +241,10 @@ generate_title() {
   log "Generating title: model=$MODEL language=$LANGUAGE"
 
   local title_raw
+  # CLAUDE_LIVE_TITLE_INTERNAL=1 is inherited by the hooks `claude -p` spawns,
+  # letting them detect and skip the subsession to avoid recursion + wasted calls.
   title_raw=$(printf '<task>%s</task>\n<dialog>\n%s\n</dialog>' "$task_prompt" "$user_msgs" \
-    | claude -p --no-session-persistence --model "$MODEL" --system-prompt "$system_prompt" \
+    | CLAUDE_LIVE_TITLE_INTERNAL=1 claude -p --no-session-persistence --model "$MODEL" --system-prompt "$system_prompt" \
         --output-format stream-json --verbose 2>/dev/null \
     | jq -r 'select(.type == "assistant") | .message.content[]? | select(.type == "text") | .text' 2>/dev/null \
     | tail -1 || true)
