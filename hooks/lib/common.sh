@@ -46,7 +46,7 @@ log() {
 
 # ── Config Loading ──
 load_config() {
-  local config_dir="${CLAUDE_PLUGIN_DATA:-$HOME/.claude/plugins/claude-live-title}"
+  local config_dir="${CLAUDE_PLUGIN_DATA:-$HOME/.claude/plugins/data/claude-live-title}"
   local config_file="$config_dir/config.json"
 
   # Migrate from legacy path if needed
@@ -230,7 +230,7 @@ generate_title() {
 
   local title_raw
   title_raw=$(printf '<task>%s</task>\n<dialog>\n%s\n</dialog>' "$task_prompt" "$user_msgs" \
-    | claude -p --model "$MODEL" --system-prompt "$system_prompt" \
+    | claude -p --no-session-persistence --model "$MODEL" --system-prompt "$system_prompt" \
         --output-format stream-json --verbose 2>/dev/null \
     | jq -r 'select(.type == "assistant") | .message.content[]? | select(.type == "text") | .text' 2>/dev/null \
     | tail -1 || true)

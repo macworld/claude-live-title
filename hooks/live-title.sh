@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
-# live-title.sh — PreToolUse hook entry point
+# live-title.sh — UserPromptSubmit hook entry point
 # Generates/updates session title in real-time with throttling.
+# Fires immediately when the user submits a message, so the title is
+# typically ready before Claude finishes responding (and before HUD renders).
 set -eu
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
