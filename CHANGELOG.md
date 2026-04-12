@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Changed
+- README: refreshed title and tagline for clarity
+- README: added "Why?" section explaining how dynamic titles help with topic drift in long conversations, session `resume`, and tmux / multi-window workflows
+- README: added Mermaid flow diagram illustrating the live-title pipeline (hook → throttle → sampling → Haiku → transcript → HUD)
+
 ## [1.0.1] - 2026-04-11
 
 ### Changed

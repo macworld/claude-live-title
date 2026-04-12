@@ -1,14 +1,19 @@
-# claude-live-title
+# Claude Live Title
 
-为 Claude Code 会话实时自动生成有意义的标题。
-
-> 将随机 slug（如 `elegant-chasing-eich`）替换为真正的标题，
-> 比如「重构用户认证模块」或「修复分页接口Bug」。
+为 Claude Code 自动生成有意义的标题，随对话推进动态更新。
 
 [![License](https://img.shields.io/github/license/macworld/claude-live-title)](LICENSE)
 [![Stars](https://img.shields.io/github/stars/macworld/claude-live-title)](https://github.com/macworld/claude-live-title/stargazers)
 
 [English](README.md) | 中文
+
+## 为什么需要它？
+
+Claude Code 默认用随机 slug（如 `elegant-chasing-eich`）作为会话名 — 当你 `resume` 回顾历史会话时，完全看不出当时在做什么。即使根据第一条消息生成标题也不够：长对话中话题会漂移，你可能从修复登录 Bug 聊到了重构认证模块，但标题还停留在最初的话题上。
+
+claude-live-title 会随对话演进持续更新标题，让你在浏览历史会话或 `resume` 时，看到的是会话 **最终的实际内容**，而不只是开头的话题。
+
+如果你习惯用 tmux 或多终端窗口同时开多个会话，有意义的标题更加关键 — 切到任意窗口就能一眼看出这个会话在做什么。搭配 [Claude HUD](#配合-claude-hud-使用) 可以直接在状态栏显示标题。
 
 ## 特性
 
@@ -27,6 +32,17 @@
 2. **Stop（兜底）** — 如果会话期间未生成标题，在会话结束时补充生成
 
 标题由轻量模型（默认 Haiku）根据对话消息样本生成——取最早的几条和最近的几条用户消息（可通过 `contextMessages.head` 和 `contextMessages.tail` 分别调整），写入会话 transcript 文件作为 `custom-title` 记录。
+
+```mermaid
+flowchart LR
+    A[用户发送消息] --> B[PreToolUse hook]
+    B --> C{是否通过<br/>节流检查？}
+    C -->|否| D[跳过]
+    C -->|是| E["采样用户消息<br/>(前 3 条 + 后 5 条)"]
+    E --> F[Haiku 生成标题]
+    F --> G[追加 custom-title<br/>到 transcript.jsonl]
+    G --> H[HUD 显示标题<br/>在状态栏]
+```
 
 ## 安装
 
