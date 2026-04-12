@@ -24,6 +24,20 @@ SAFE_ID=$(sanitize_session_id "$SESSION_ID")
 load_config
 log "stop-title triggered: session=$SESSION_ID (safe=$SAFE_ID)"
 
+# ── Defer if Live hook is currently running ──
+# Live holds its lock across its full title-generation cycle; if we see it,
+# Live will write the title, so we skip to avoid concurrent generation.
+LOCK_DIR="/tmp/claude-live-title-lock-${SAFE_ID}"
+if [[ -d "$LOCK_DIR" ]]; then
+  LOCK_AGE=$(( $(date +%s) - $(get_mtime "$LOCK_DIR") ))
+  if [[ "$LOCK_AGE" -lt 60 ]]; then
+    log "Live hook active (lock age=${LOCK_AGE}s), deferring"
+    exit 0
+  fi
+  log "Stale Live lock (${LOCK_AGE}s), cleaning up"
+  rm -rf "$LOCK_DIR"
+fi
+
 # ── Dedup: skip if already named by this Stop hook ──
 MARKER="/tmp/claude-live-title-named-${SAFE_ID}"
 [[ -f "$MARKER" ]] && { log "Already named (marker exists)"; exit 0; }

@@ -20,16 +20,34 @@ TRANSCRIPT_PATH=$(echo "$INPUT" | jq -r '.transcript_path // empty')
 # UserPromptSubmit delivers the current prompt here before it's in transcript.
 PROMPT=$(echo "$INPUT" | jq -r '.prompt // empty')
 
-[[ -z "$SESSION_ID" || -z "$TRANSCRIPT_PATH" || ! -f "$TRANSCRIPT_PATH" ]] && exit 0
+[[ -z "$SESSION_ID" || -z "$TRANSCRIPT_PATH" ]] && exit 0
 
 SAFE_ID=$(sanitize_session_id "$SESSION_ID")
 [[ -z "$SAFE_ID" ]] && exit 0
 
 load_config
-log "live-title triggered: session=$SESSION_ID (safe=$SAFE_ID)"
 
 # ── Check live update switch ──
 [[ "$LIVE_UPDATE" != "true" ]] && { log "Live update disabled"; exit 0; }
+
+# ── Acquire lock BEFORE waiting / generating ──
+# Holding the lock early lets the Stop hook see "Live is working" and defer,
+# preventing both hooks from generating titles concurrently.
+LOCK_DIR="/tmp/claude-live-title-lock-${SAFE_ID}"
+acquire_lock "$LOCK_DIR" || exit 0
+trap 'release_lock "$LOCK_DIR"' EXIT
+
+# ── Wait for transcript (fresh-session race) ──
+# On turn 1 of a brand-new session, UserPromptSubmit can fire ~100ms before
+# CC creates the transcript file. Poll briefly for it to appear.
+WAIT_ITERS=0
+while [[ ! -f "$TRANSCRIPT_PATH" && "$WAIT_ITERS" -lt 10 ]]; do
+  sleep 0.1
+  WAIT_ITERS=$(( WAIT_ITERS + 1 ))
+done
+[[ ! -f "$TRANSCRIPT_PATH" ]] && exit 0
+
+log "live-title triggered: session=$SESSION_ID (safe=$SAFE_ID) transcript_wait=${WAIT_ITERS}x100ms"
 
 # ── Count user messages ──
 TOTAL_MSGS=$(jq -c 'select(.type == "user")' "$TRANSCRIPT_PATH" 2>/dev/null | wc -l || echo 0)
@@ -56,11 +74,6 @@ if [[ -f "$STATE_FILE" ]]; then
   fi
 fi
 # No state file = first run in this session, proceed immediately
-
-# ── Acquire lock ──
-LOCK_DIR="/tmp/claude-live-title-lock-${SAFE_ID}"
-acquire_lock "$LOCK_DIR" || exit 0
-trap 'release_lock "$LOCK_DIR"' EXIT
 
 # ── Extract, generate, write ──
 USER_MSGS=$(extract_user_messages "$TRANSCRIPT_PATH" "$PROMPT") || exit 0
