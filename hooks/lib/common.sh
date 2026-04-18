@@ -214,6 +214,25 @@ extract_user_messages() {
   echo "$msgs"
 }
 
+# ── AI Context Extraction ──
+
+# Return the last AI text block from the transcript, first paragraph only,
+# capped to 300 chars (appends "..." on truncation).
+# Empty output when no assistant text exists anywhere.
+#
+# Used by the title pipeline to give Haiku a single compact signal of
+# current dialog state — resolves intent ambiguity when the user's latest
+# messages are short replies like "ok"/"好"/"continue".
+extract_last_ai_text() {
+  local transcript="$1"
+  jq -rs '
+    [.[] | select(.type == "assistant") | .message.content[]? | select(.type == "text") | .text]
+    | .[-1] // empty
+    | (split("\n\n")[0]) as $para
+    | if ($para | length) > 300 then ($para[:300] + "...") else $para end
+  ' "$transcript" 2>/dev/null
+}
+
 # ── Title Generation ──
 
 generate_title() {
