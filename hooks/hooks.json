@@ -8,7 +8,7 @@
             "type": "command",
             "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/live-title.sh\"",
             "async": true,
-            "timeout": 30
+            "timeout": 60
           }
         ]
       }
@@ -21,7 +21,7 @@
             "type": "command",
             "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/stop-title.sh\"",
             "async": true,
-            "timeout": 30
+            "timeout": 60
           }
         ]
       }
