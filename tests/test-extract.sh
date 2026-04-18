@@ -85,6 +85,34 @@ R=$(extract_last_ai_text "$T")
 rm -f "$T"
 
 echo ""
+echo "=== format_dialog ==="
+
+# USER + AI labels
+R=$(format_dialog "hello
+world" "AI said this")
+EXPECTED="USER: hello
+USER: world
+AI: AI said this"
+[[ "$R" == "$EXPECTED" ]] && report PASS "USER + AI labels" || report FAIL "mismatch: got '$R'"
+
+# USER + empty AI → only USER lines, no trailing AI
+R=$(format_dialog "hello" "")
+[[ "$R" == "USER: hello" ]] && report PASS "empty AI → no AI line" || report FAIL "got '$R'"
+
+# Multi-line USER → each line prefixed; blank lines dropped
+R=$(format_dialog "line1
+line2
+line3" "")
+EXPECTED="USER: line1
+USER: line2
+USER: line3"
+[[ "$R" == "$EXPECTED" ]] && report PASS "each line prefixed" || report FAIL "got '$R'"
+
+# Only AI, no user content → AI line only
+R=$(format_dialog "" "only ai here")
+[[ "$R" == "AI: only ai here" ]] && report PASS "empty user + AI → AI only" || report FAIL "got '$R'"
+
+echo ""
 echo "================================"
 echo "Results: $PASS passed, $FAIL failed"
 [[ "$FAIL" -eq 0 ]] && echo "All tests passed!" || exit 1

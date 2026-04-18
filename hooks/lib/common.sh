@@ -233,6 +233,30 @@ extract_last_ai_text() {
   ' "$transcript" 2>/dev/null
 }
 
+# Compose a labeled dialog string from USER messages (one per line) and an
+# optional AI text block. Blank USER lines are dropped. If ai_text is empty,
+# no AI: line is appended.
+#
+# Output shape:
+#   USER: ...
+#   USER: ...
+#   AI: ...
+format_dialog() {
+  local user_msgs="$1" ai_text="$2"
+  local out=""
+  if [[ -n "$user_msgs" ]]; then
+    out=$(printf '%s' "$user_msgs" | awk 'NF {print "USER: " $0}')
+  fi
+  if [[ -n "$ai_text" ]]; then
+    if [[ -n "$out" ]]; then
+      out=$(printf '%s\nAI: %s' "$out" "$ai_text")
+    else
+      out="AI: $ai_text"
+    fi
+  fi
+  printf '%s' "$out"
+}
+
 # ── Title Generation ──
 
 generate_title() {
