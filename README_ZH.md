@@ -52,39 +52,40 @@ flowchart LR
 
 ## 安装
 
-在 Claude Code 会话中执行：
+有两种安装方式，任选其一，然后重启 Claude Code。
 
-**第 1 步：添加插件源**
+### 从 Anthropic 官方目录安装（推荐）
+
+已收录在 [`claude-plugins-community`](https://github.com/anthropics/claude-plugins-community)。官方目录每周批量同步一次，所以那边的版本可能比本仓库晚几天。
+
+```
+/plugin marketplace add anthropics/claude-plugins-community
+/plugin install claude-live-title@claude-plugins-community
+```
+
+### 从本仓库直接安装（永远最新）
+
 ```
 /plugin marketplace add macworld/claude-live-title
+/plugin install claude-live-title@claude-live-title
 ```
 
-**第 2 步：安装插件**
+### 然后重启 Claude Code
+
+Hook 只在启动时注册，必须完整重启才能生效 —— `/reload-plugins` 只能重载 command 和 skill，不能重载 hook。插件开箱即用，无需任何配置。
 
 <details>
-<summary><strong>⚠️ Linux 用户请先看这里</strong></summary>
+<summary><strong>Linux 上安装报 <code>EXDEV: cross-device link not permitted</code>？</strong></summary>
 
-Linux 上 `/tmp` 通常是独立的 tmpfs 文件系统，可能导致安装失败：
-```
-EXDEV: cross-device link not permitted
-```
+很多 Linux 发行版的 `/tmp` 是独立的 tmpfs，会导致插件安装失败。启动 Claude Code 前把 TMPDIR 指到 home 目录下：
 
-**解决方法**：安装前设置 TMPDIR：
 ```bash
 mkdir -p ~/.cache/tmp && TMPDIR=~/.cache/tmp claude
 ```
 
-然后在该会话中执行下面的安装命令。
+然后在该会话中执行上面的安装命令。
 
 </details>
-
-```
-/plugin install claude-live-title
-```
-
-**第 3 步：重启 Claude Code**
-
-Hook 只在启动时注册，必须完整重启才能生效 —— 单独执行 `/reload-plugins` 不够（该命令只能热重载 command 和 skill）。插件开箱即用，无需任何配置。
 
 ## 配置
 

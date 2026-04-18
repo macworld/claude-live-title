@@ -52,39 +52,40 @@ flowchart LR
 
 ## Installation
 
-Inside a Claude Code session, run:
+There are two ways to install. Pick one, then restart Claude Code.
 
-**Step 1: Add the marketplace**
+### From the official Anthropic directory (recommended)
+
+Listed in [`claude-plugins-community`](https://github.com/anthropics/claude-plugins-community). The directory syncs in weekly batches, so the version there may be a few days behind this repo.
+
+```
+/plugin marketplace add anthropics/claude-plugins-community
+/plugin install claude-live-title@claude-plugins-community
+```
+
+### From this repo (always latest)
+
 ```
 /plugin marketplace add macworld/claude-live-title
+/plugin install claude-live-title@claude-live-title
 ```
 
-**Step 2: Install the plugin**
+### Then restart Claude Code
+
+Hooks only register at startup, so a full restart is needed — `/reload-plugins` reloads commands and skills, but not hooks. The plugin works out of the box with zero configuration.
 
 <details>
-<summary><strong>⚠️ Linux users: Click here first</strong></summary>
+<summary><strong>Linux: install fails with <code>EXDEV: cross-device link not permitted</code>?</strong></summary>
 
-On Linux, `/tmp` is often a separate filesystem (tmpfs), which causes plugin installation to fail with:
-```
-EXDEV: cross-device link not permitted
-```
+`/tmp` is on a separate tmpfs filesystem on many Linux setups, which breaks the plugin install. Point TMPDIR at your home directory before launching Claude Code:
 
-**Fix**: Set TMPDIR before installing:
 ```bash
 mkdir -p ~/.cache/tmp && TMPDIR=~/.cache/tmp claude
 ```
 
-Then run the install command below in that session.
+Then run the install commands inside that session.
 
 </details>
-
-```
-/plugin install claude-live-title
-```
-
-**Step 3: Restart Claude Code**
-
-Hooks only register at startup, so a full restart is required — `/reload-plugins` alone is not enough (that command only reloads commands and skills). The plugin works out of the box with zero configuration.
 
 ## Configuration
 
