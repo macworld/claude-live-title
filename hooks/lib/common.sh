@@ -263,9 +263,9 @@ generate_title() {
   local user_msgs="$1"
   local system_prompt='You are a title generator. Output ONLY the title. No other text.'
 
-  local task_prompt
+  local lang_instr
   if [[ "$LANGUAGE" == "auto" ]]; then
-    task_prompt="Generate a concise title within ${MAX_LENGTH} display columns for the following conversation. CJK characters count as 2 columns, Latin characters as 1. Be brief but descriptive. The messages are in chronological order; focus more on the latest messages as they reflect the current direction. Use the same language the user is writing in."
+    lang_instr="Write the title in the main language of the conversation."
   else
     local lang_name
     case "$LANGUAGE" in
@@ -278,8 +278,21 @@ generate_title() {
       es) lang_name="Spanish" ;;
       *)  lang_name="$LANGUAGE" ;;
     esac
-    task_prompt="Generate a concise title within ${MAX_LENGTH} display columns for the following conversation. CJK characters count as 2 columns, Latin characters as 1. Be brief but descriptive. The messages are in chronological order; focus more on the latest messages as they reflect the current direction. Write the title in ${lang_name}."
+    lang_instr="Write the title in ${lang_name}."
   fi
+
+  local task_prompt="Generate a concrete title for the following Claude Code session.
+
+Budget: target roughly 70% of ${MAX_LENGTH} display columns (CJK=2 columns, Latin=1). Do not exceed the limit. Do not go overly terse — utilise the budget.
+
+Format: messages are prefixed USER: / AI:. Multiple USER: lines in chronological order. At most one AI: line — the latest state of the assistant's response.
+
+Rules:
+- Prefer SPECIFIC nouns/verbs (file names, function names, concrete actions) over abstract ones.
+- Weight later messages heavier — the direction may have drifted from the initial request.
+- When a USER: line is a short reply (ok, 好, continue, 嗯), the actual intent lives in the AI: line — use it.
+- Do NOT merge unrelated topics into a nonsense compound. Pick the current/active direction. If the AI: line mentions recently completed work, preserving both topics is fine.
+- ${lang_instr}"
 
   log "Generating title: model=$MODEL language=$LANGUAGE"
 
