@@ -6,7 +6,7 @@
   },
   "metadata": {
     "description": "Auto-generate meaningful session titles in real-time",
-    "version": "1.0.4"
+    "version": "1.1.0"
   },
   "plugins": [
     {
