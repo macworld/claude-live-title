@@ -78,8 +78,10 @@ fi
 # ── Extract, generate, write ──
 USER_MSGS=$(extract_user_messages "$TRANSCRIPT_PATH" "$PROMPT") || exit 0
 [[ -z "$USER_MSGS" ]] && exit 0
+AI_TEXT=$(extract_last_ai_text "$TRANSCRIPT_PATH")
+DIALOG=$(format_dialog "$USER_MSGS" "$AI_TEXT")
 
-TITLE_RAW=$(generate_title "$USER_MSGS") || { log "Title generation failed"; exit 0; }
+TITLE_RAW=$(generate_title "$DIALOG") || { log "Title generation failed"; exit 0; }
 TITLE=$(clean_title "$TITLE_RAW")
 
 if [[ -z "$TITLE" ]]; then

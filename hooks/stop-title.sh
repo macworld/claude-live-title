@@ -60,8 +60,10 @@ if [[ -z "$USER_MSGS" ]]; then
   rm -f "$MARKER"
   exit 0
 fi
+AI_TEXT=$(extract_last_ai_text "$TRANSCRIPT_PATH")
+DIALOG=$(format_dialog "$USER_MSGS" "$AI_TEXT")
 
-TITLE_RAW=$(generate_title "$USER_MSGS" || true)
+TITLE_RAW=$(generate_title "$DIALOG" || true)
 if [[ -z "$TITLE_RAW" ]]; then
   rm -f "$MARKER"
   log "Title generation failed or empty"
