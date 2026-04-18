@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+- Title generation now samples a mixed USER + latest-AI dialog instead of user-only. The last AI text block (first paragraph, ≤300 chars) is appended as a single `AI:` line — resolves two long-standing title-quality issues: intent ambiguity after short user replies (ok/继续/好), and stale titles on long multi-task sessions that drift away from the initial request.
+- Title prompt rewritten to target roughly 70% of the length budget and to handle the USER:/AI: label convention. Short user replies now route intent lookup to the AI line; unrelated topics are no longer merged into nonsense compound phrases.
+- Hook timeout raised from 30s to 60s for both hooks. Absorbs Haiku latency variance up to ~40s observed in validation; aligns with the Stop hook's existing 60s stale-lock recovery.
+
+### Added
+- `tests/test-extract.sh` — unit coverage for the new `extract_last_ai_text` and `format_dialog` helpers in `common.sh` (11 cases including truncation, multi-paragraph handling, tool-only-last fallback, and dialog formatting edge cases).
+
 ## [1.0.4] - 2026-04-12
 
 ### Fixed
