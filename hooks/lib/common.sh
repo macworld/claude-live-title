@@ -358,16 +358,21 @@ generate_title() {
 
   local task_prompt="Generate a concrete title for the following Claude Code session.
 
-Budget: target roughly 70% of ${MAX_LENGTH} display columns (CJK=2 columns, Latin=1). Do not exceed the limit. Do not go overly terse — utilise the budget.
+Budget: target roughly 70% of ${MAX_LENGTH} display columns (CJK=2, Latin=1). Don't exceed. Don't go overly terse.
 
-Format: messages are prefixed USER: / AI:. Multiple USER: lines in chronological order. At most one AI: line — the latest state of the assistant's response.
+Labels:
+- GOAL: the session's original intent (first user message).
+- USER: later user messages in chronological order.
+- STATE: the assistant's latest substantive output (already sanitized, supplementary context only).
 
-Rules:
-- Prefer SPECIFIC nouns/verbs (file names, function names, concrete actions) over abstract ones.
-- Weight later messages heavier — the direction may have drifted from the initial request.
-- When a USER: line is a short reply (ok, 好, continue, 嗯), the actual intent lives in the AI: line — use it.
-- Do NOT merge unrelated topics into a nonsense compound. Pick the current/active direction. If the AI: line mentions recently completed work, preserving both topics is fine.
-- ${lang_instr}"
+How to pick the topic:
+1. GOAL anchors the session's frame — what the session is fundamentally about.
+2. The LAST substantive USER message anchors the current focus — weight it most heavily when it's non-trivial.
+3. Earlier USER messages show how the conversation evolved; use them to disambiguate or refine.
+4. STATE is topic-source ONLY when the last USER is a short filler reply (ok, 好, continue, 嗯, go, yes, 行, sure, do it). Otherwise STATE is background context — do not derive the topic from it.
+5. Prefer SPECIFIC nouns/verbs (file names, function names, concrete actions) over abstract ones.
+6. Do NOT merge unrelated topics into a compound phrase.
+7. ${lang_instr}"
 
   log "Generating title: model=$MODEL language=$LANGUAGE"
 
