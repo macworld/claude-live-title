@@ -272,7 +272,7 @@ sanitize_ai_text() {
   if [[ "$substance" -lt 30 ]]; then
     return 0
   fi
-  # Step 6: 300-byte cap
+  # Step 6: 300-char cap (bash ${var:0:N} slices by chars under UTF-8)
   if [[ ${#cleaned} -gt 300 ]]; then
     cleaned="${cleaned:0:300}..."
   fi
