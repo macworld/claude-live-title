@@ -144,32 +144,35 @@ R=$(extract_user_messages "$T" "")
 rm -f "$T"
 
 echo ""
-echo "=== format_dialog ==="
+echo "=== format_dialog (goal, users, state) ==="
 
-# USER + AI labels
-R=$(format_dialog "hello
-world" "AI said this")
-EXPECTED="USER: hello
-USER: world
-AI: AI said this"
-[[ "$R" == "$EXPECTED" ]] && report PASS "USER + AI labels" || report FAIL "mismatch: got '$R'"
+# Full: GOAL + USER + STATE
+R=$(format_dialog "the goal" $'user one\nuser two' "state content here")
+EXPECTED=$'GOAL: the goal\nUSER: user one\nUSER: user two\nSTATE: state content here'
+[[ "$R" == "$EXPECTED" ]] && report PASS "GOAL + USER + STATE" || report FAIL "full got: $R"
 
-# USER + empty AI → only USER lines, no trailing AI
-R=$(format_dialog "hello" "")
-[[ "$R" == "USER: hello" ]] && report PASS "empty AI → no AI line" || report FAIL "got '$R'"
+# No STATE
+R=$(format_dialog "the goal" "user one" "")
+EXPECTED=$'GOAL: the goal\nUSER: user one'
+[[ "$R" == "$EXPECTED" ]] && report PASS "GOAL + USER, no STATE" || report FAIL "no-state got: $R"
 
-# Multi-line USER → each line prefixed; blank lines dropped
-R=$(format_dialog "line1
-line2
-line3" "")
-EXPECTED="USER: line1
-USER: line2
-USER: line3"
-[[ "$R" == "$EXPECTED" ]] && report PASS "each line prefixed" || report FAIL "got '$R'"
+# GOAL only
+R=$(format_dialog "just the goal" "" "")
+[[ "$R" == "GOAL: just the goal" ]] && report PASS "GOAL only" || report FAIL "goal-only got: $R"
 
-# Only AI, no user content → AI line only
-R=$(format_dialog "" "only ai here")
-[[ "$R" == "AI: only ai here" ]] && report PASS "empty user + AI → AI only" || report FAIL "got '$R'"
+# GOAL + STATE (no USER in between)
+R=$(format_dialog "the goal" "" "state content")
+EXPECTED=$'GOAL: the goal\nSTATE: state content'
+[[ "$R" == "$EXPECTED" ]] && report PASS "GOAL + STATE (skip USER)" || report FAIL "goal+state got: $R"
+
+# Empty USER content with blank line → blank filtered
+R=$(format_dialog "g" $'user one\n\nuser two' "s")
+EXPECTED=$'GOAL: g\nUSER: user one\nUSER: user two\nSTATE: s'
+[[ "$R" == "$EXPECTED" ]] && report PASS "blank USER lines dropped" || report FAIL "blank-drop got: $R"
+
+# All empty → empty output
+R=$(format_dialog "" "" "")
+[[ -z "$R" ]] && report PASS "all-empty → empty" || report FAIL "all-empty got: $R"
 
 echo ""
 echo "================================"

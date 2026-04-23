@@ -309,28 +309,27 @@ sanitize_ai_text() {
   printf '%s' "$cleaned"
 }
 
-# Compose a labeled dialog string from USER messages (one per line) and an
-# optional AI text block. Blank USER lines are dropped. If ai_text is empty,
-# no AI: line is appended.
+# Compose a labeled dialog from GOAL (single line), USER messages (one per
+# line, blank lines dropped), and an optional STATE line. When a field is
+# empty, its label is omitted — no empty "STATE:" line, etc.
 #
 # Output shape:
+#   GOAL: ...
 #   USER: ...
 #   USER: ...
-#   AI: ...
+#   STATE: ...
 format_dialog() {
-  local user_msgs="$1" ai_text="$2"
-  local out=""
+  local goal="$1" user_msgs="$2" state="$3"
+  local parts=()
+  [[ -n "$goal" ]] && parts+=("GOAL: $goal")
   if [[ -n "$user_msgs" ]]; then
-    out=$(printf '%s' "$user_msgs" | awk 'NF {print "USER: " $0}')
+    local user_block
+    user_block=$(printf '%s' "$user_msgs" | awk 'NF { print "USER: " $0 }')
+    [[ -n "$user_block" ]] && parts+=("$user_block")
   fi
-  if [[ -n "$ai_text" ]]; then
-    if [[ -n "$out" ]]; then
-      out=$(printf '%s\nAI: %s' "$out" "$ai_text")
-    else
-      out="AI: $ai_text"
-    fi
-  fi
-  printf '%s' "$out"
+  [[ -n "$state" ]] && parts+=("STATE: $state")
+  local IFS=$'\n'
+  printf '%s' "${parts[*]}"
 }
 
 # ── Title Generation ──
