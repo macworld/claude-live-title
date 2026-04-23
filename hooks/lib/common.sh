@@ -227,6 +227,52 @@ extract_last_ai_text() {
   ' "$transcript" 2>/dev/null
 }
 
+# Clean an AI text block so it's safe to feed as title-generation context.
+# Pipeline (see 2026-04-23-title-balance-design.md):
+#   1. Strip fenced code blocks
+#   2. Strip inline backticks (keep the content between them)
+#   3. Strip pure-output / stack-frame lines
+#   4. Collapse multiple blank lines, trim leading blanks
+#   5. Substance check: <30 non-whitespace bytes → empty
+#   6. Cap at 300 bytes, suffix "..."
+sanitize_ai_text() {
+  local raw="$1"
+  [[ -z "$raw" ]] && return 0
+  local cleaned
+  # Step 1: strip fenced code blocks (whole fence including delimiters)
+  cleaned=$(printf '%s' "$raw" | awk '
+    /^```/ { in_fence = !in_fence; next }
+    !in_fence
+  ')
+  # Step 2: remove inline backticks (keep content)
+  cleaned=$(printf '%s' "$cleaned" | sed 's/`//g')
+  # Step 3: strip pure-output / stack-frame lines
+  cleaned=$(printf '%s' "$cleaned" | sed -E '
+    /^[[:space:]]*Traceback/d
+    /^[[:space:]]*File "[^"]+", line [0-9]+/d
+    /^[[:space:]]*at [A-Za-z_][A-Za-z0-9_.]*[[:space:]]*\([^)]*\)/d
+    /^[[:space:]]*\$[[:space:]]+/d
+    /^[[:space:]]*>[[:space:]]+/d
+    /^[[:space:]]*stderr:/d
+    /^[[:space:]]*stdout:/d
+  ')
+  # Step 4: collapse multiple blank lines to one; trim leading blanks
+  cleaned=$(printf '%s\n' "$cleaned" \
+    | awk 'NF { blank = 0; print; next } !blank { print; blank = 1 }' \
+    | awk '/./ { found = 1 } found')
+  # Step 5: substance check (bytes, whitespace excluded)
+  local substance
+  substance=$(printf '%s' "$cleaned" | tr -d '[:space:]' | wc -c | tr -d ' ')
+  if [[ "$substance" -lt 30 ]]; then
+    return 0
+  fi
+  # Step 6: 300-byte cap
+  if [[ ${#cleaned} -gt 300 ]]; then
+    cleaned="${cleaned:0:300}..."
+  fi
+  printf '%s' "$cleaned"
+}
+
 # Compose a labeled dialog string from USER messages (one per line) and an
 # optional AI text block. Blank USER lines are dropped. If ai_text is empty,
 # no AI: line is appended.
