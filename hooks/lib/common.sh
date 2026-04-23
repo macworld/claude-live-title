@@ -231,17 +231,23 @@ extract_last_ai_text() {
 # Pipeline (see 2026-04-23-title-balance-design.md):
 #   1. Strip fenced code blocks
 #   2. Strip inline backticks (keep the content between them)
-#   3. Strip pure-output / stack-frame lines
+#   3. Strip pure-output, stack-frame, and stdout/stderr label lines
 #   4. Collapse multiple blank lines, trim leading blanks
-#   5. Substance check: <30 non-whitespace bytes → empty
-#   6. Cap at 300 bytes, suffix "..."
+#   5. Substance check: <30 non-whitespace bytes remaining → return empty
+#   6. Cap at 300 characters, append "..." on truncation
+#
+# Note: step 5 counts bytes (via wc -c on whitespace-stripped input) while
+# step 6 caps by bash characters (${var:0:N}). The units intentionally differ:
+# the substance floor is "enough bytes to be meaningful" (30 bytes ≈ 10 CJK
+# chars ≈ 30 ASCII chars), while the ceiling is "enough characters of reading
+# material for Haiku" regardless of encoding.
 sanitize_ai_text() {
   local raw="$1"
   [[ -z "$raw" ]] && return 0
   local cleaned
   # Step 1: strip fenced code blocks (whole fence including delimiters)
   cleaned=$(printf '%s' "$raw" | awk '
-    /^```/ { in_fence = !in_fence; next }
+    /^[[:space:]]*```/ { in_fence = !in_fence; next }
     !in_fence
   ')
   # Step 2: remove inline backticks (keep content)

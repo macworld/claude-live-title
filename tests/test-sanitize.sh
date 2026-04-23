@@ -93,6 +93,16 @@ else
   report FAIL "long-sanitize: got length ${#R}, tail '${R: -3}'"
 fi
 
+# Case 10: 300-char cap with CJK input (validates char-based, not byte-based, slicing)
+IN=$(python3 -c "print('中文' * 200)")  # 400 CJK chars = 1200 bytes
+R=$(sanitize_ai_text "$IN")
+CHAR_LEN=$(printf '%s' "$R" | wc -m | tr -d ' ')
+if [[ "$CHAR_LEN" -eq 303 && "${R: -3}" == "..." ]]; then
+  report PASS "CJK input capped to 300 chars + ..."
+else
+  report FAIL "CJK cap: got ${CHAR_LEN} chars, tail '${R: -3}'"
+fi
+
 echo ""
 echo "================================"
 echo "Results: $PASS passed, $FAIL failed"
