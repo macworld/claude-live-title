@@ -76,10 +76,17 @@ fi
 # No state file = first run in this session, proceed immediately
 
 # ── Extract, generate, write ──
-USER_MSGS=$(extract_user_messages "$TRANSCRIPT_PATH" "$PROMPT") || exit 0
-[[ -z "$USER_MSGS" ]] && exit 0
-AI_TEXT=$(extract_last_ai_text "$TRANSCRIPT_PATH")
-DIALOG=$(format_dialog "$USER_MSGS" "$AI_TEXT")
+GOAL=$(extract_goal_message "$TRANSCRIPT_PATH")
+# Fresh-session turn-1 race: transcript hasn't been flushed yet, but the
+# prompt itself is the goal.
+[[ -z "$GOAL" && -n "$PROMPT" ]] && GOAL="$PROMPT"
+
+USER_MSGS=$(extract_user_messages "$TRANSCRIPT_PATH" "$PROMPT" "$GOAL" || true)
+AI_RAW=$(extract_last_ai_text "$TRANSCRIPT_PATH")
+AI_TEXT=$(sanitize_ai_text "$AI_RAW")
+DIALOG=$(format_dialog "$GOAL" "$USER_MSGS" "$AI_TEXT")
+
+[[ -z "$DIALOG" ]] && { log "Empty dialog, skipping"; exit 0; }
 
 TITLE_RAW=$(generate_title "$DIALOG") || { log "Title generation failed"; exit 0; }
 TITLE=$(clean_title "$TITLE_RAW")
