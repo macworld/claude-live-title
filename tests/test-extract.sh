@@ -56,24 +56,25 @@ R=$(extract_last_ai_text "$T")
 [[ "$R" == "second" ]] && report PASS "multi-assistant last text wins" || report FAIL "got '$R'"
 rm -f "$T"
 
-# Text > 300 chars → truncated with "..."
+# Text > 300 chars → returned as-is (no truncation at this layer)
 LONG=$(python3 -c 'print("a" * 350)')
 LINE=$(jq -nc --arg t "$LONG" '{type:"assistant",message:{content:[{type:"text",text:$t}]}}')
 T=$(make_transcript "$LINE
 ")
 R=$(extract_last_ai_text "$T")
-if [[ ${#R} -eq 303 ]] && [[ "${R: -3}" == "..." ]]; then
-  report PASS "long text truncated with ..."
+if [[ ${#R} -eq 350 ]]; then
+  report PASS "long text returned raw (no truncation)"
 else
-  report FAIL "got length ${#R}, tail '${R: -3}'"
+  report FAIL "got length ${#R}, expected 350"
 fi
 rm -f "$T"
 
-# Multi-paragraph → first paragraph only
+# Multi-paragraph → returned as-is (no paragraph split at this layer)
 T=$(make_transcript '{"type":"assistant","message":{"content":[{"type":"text","text":"intent here.\n\nDetail paragraph."}]}}
 ')
 R=$(extract_last_ai_text "$T")
-[[ "$R" == "intent here." ]] && report PASS "multi-paragraph → first only" || report FAIL "got '$R'"
+EXPECTED=$'intent here.\n\nDetail paragraph.'
+[[ "$R" == "$EXPECTED" ]] && report PASS "multi-paragraph returned raw" || report FAIL "got '$R'"
 rm -f "$T"
 
 # Last assistant has only tool_use; earlier has text → falls back to earlier
