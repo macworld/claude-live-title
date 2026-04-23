@@ -86,6 +86,40 @@ R=$(extract_last_ai_text "$T")
 rm -f "$T"
 
 echo ""
+echo "=== extract_goal_message ==="
+
+# Goal normal case — first user message
+T=$(make_transcript '{"type":"user","message":{"content":"帮我修登录 bug"}}
+{"type":"assistant","message":{"content":[{"type":"text","text":"好的"}]}}
+{"type":"user","message":{"content":"用 redis 还是 memory"}}
+')
+R=$(extract_goal_message "$T")
+[[ "$R" == "帮我修登录 bug" ]] && report PASS "goal = first user message" || report FAIL "got '$R'"
+rm -f "$T"
+
+# No user messages → empty
+T=$(make_transcript '{"type":"assistant","message":{"content":[{"type":"text","text":"only AI"}]}}
+')
+R=$(extract_goal_message "$T")
+[[ -z "$R" ]] && report PASS "no user entries → empty" || report FAIL "got '$R'"
+rm -f "$T"
+
+# First user entry is a tool_result (type:user with content[0].type:tool_result) → skip to next real user text
+T=$(make_transcript '{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t1","content":"output"}]}}
+{"type":"user","message":{"content":"实际的第一条用户消息"}}
+')
+R=$(extract_goal_message "$T")
+[[ "$R" == "实际的第一条用户消息" ]] && report PASS "tool_result skipped, next user text wins" || report FAIL "got '$R'"
+rm -f "$T"
+
+# Content as array with text block → extract text
+T=$(make_transcript '{"type":"user","message":{"content":[{"type":"text","text":"数组形式的第一条"}]}}
+')
+R=$(extract_goal_message "$T")
+[[ "$R" == "数组形式的第一条" ]] && report PASS "array content with text extracted" || report FAIL "got '$R'"
+rm -f "$T"
+
+echo ""
 echo "=== format_dialog ==="
 
 # USER + AI labels

@@ -214,6 +214,29 @@ extract_user_messages() {
   echo "$msgs"
 }
 
+# Return the first substantive user-message text in the transcript.
+# Skips user entries whose content is only tool_result (no text block).
+# Returns empty when the transcript has no user text at all.
+extract_goal_message() {
+  local transcript="$1"
+  jq -r '
+    select(.type == "user")
+    | if (.message.content | type) == "string" then
+        .message.content
+      elif (.message.content | type) == "array" then
+        [.message.content[] | select(.type == "text") | .text] | join(" ")
+      else
+        empty
+      end
+    | select(length > 0)
+  ' "$transcript" 2>/dev/null \
+    | sed '/<system-reminder>/d; /<\/system-reminder>/d' \
+    | grep -v '^<command-' | grep -v '^<local-command' \
+    | sed '/^[[:space:]]*$/d' \
+    | head -n 1 \
+    | head -c "$MAX_INPUT_CHARS"
+}
+
 # ── AI Context Extraction ──
 
 # Return the raw text of the last assistant text block in the transcript.
