@@ -120,6 +120,30 @@ R=$(extract_goal_message "$T")
 rm -f "$T"
 
 echo ""
+echo "=== extract_user_messages exclude ==="
+
+# Three user messages; exclude the first → tail returns only the other two
+T=$(make_transcript '{"type":"user","message":{"content":"first goal message"}}
+{"type":"user","message":{"content":"second mid"}}
+{"type":"user","message":{"content":"third tail"}}
+')
+R=$(extract_user_messages "$T" "" "first goal message")
+if [[ "$R" != *"first goal message"* && "$R" == *"second mid"* && "$R" == *"third tail"* ]]; then
+  report PASS "exclude=first removes first from sample"
+else
+  report FAIL "exclude got '$R'"
+fi
+rm -f "$T"
+
+# No exclude arg → behaves as before (first message included)
+T=$(make_transcript '{"type":"user","message":{"content":"first goal message"}}
+{"type":"user","message":{"content":"second mid"}}
+')
+R=$(extract_user_messages "$T" "")
+[[ "$R" == *"first goal message"* ]] && report PASS "no exclude → first still in sample" || report FAIL "no-exclude got '$R'"
+rm -f "$T"
+
+echo ""
 echo "=== format_dialog ==="
 
 # USER + AI labels

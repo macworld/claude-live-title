@@ -174,6 +174,9 @@ extract_user_messages() {
   # pass it in to avoid a one-turn lag (and to have any content at all on the
   # first prompt of a fresh session).
   local current_prompt="${2:-}"
+  # Optional: a goal string to exclude from the sample so GOAL: and USER:
+  # lines don't duplicate the same content in the dialog.
+  local exclude="${3:-}"
 
   local msgs=""
 
@@ -207,6 +210,10 @@ extract_user_messages() {
     else
       msgs="$current_prompt"
     fi
+  fi
+
+  if [[ -n "$exclude" ]]; then
+    msgs=$(printf '%s' "$msgs" | grep -vxF -- "$exclude" || true)
   fi
 
   msgs=$(printf '%s' "$msgs" | head -c "$MAX_INPUT_CHARS")
