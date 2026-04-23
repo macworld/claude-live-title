@@ -13,7 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - Dropped the "weight later messages heavier" rule from the prompt — replaced with a tiered hierarchy anchoring on GOAL and weighting the last substantive USER message. Prevents title drift toward mid-task AI content during long sessions.
 
 ### Added
-- `tests/test-sanitize.sh` — unit coverage for the new `sanitize_ai_text` pipeline (10 cases: fenced blocks, indented fences, inline backticks, Python stack frames, shell prompt lines, blank-line handling around fences, substance threshold, CJK cap behaviour).
+- `tests/test-sanitize.sh` — unit coverage for the new `sanitize_ai_text` pipeline (11 cases: fenced blocks, indented fences, inline backticks, Python stack frames, shell prompt lines, blank-line handling around fences, substance threshold, CJK cap behaviour).
 - `extract_goal_message` helper in `common.sh` for the new GOAL label.
 
 ## [1.1.0] - 2026-04-18

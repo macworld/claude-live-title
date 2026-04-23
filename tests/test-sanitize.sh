@@ -93,7 +93,16 @@ else
   report FAIL "long-sanitize: got length ${#R}, tail '${R: -3}'"
 fi
 
-# Case 10: 300-char cap with CJK input (validates char-based, not byte-based, slicing)
+# Case 10: Indented fence (GFM allows up to 3 leading spaces; lists often nest fences this way)
+IN=$'列表里的代码块：\n  ```python\n  x = 1\n  ```\n代码外的修复说明写得足够长触发实质检查'
+R=$(sanitize_ai_text "$IN")
+if [[ "$R" == *"列表里的代码块"* && "$R" == *"代码外的修复说明写得足够长触发实质检查"* && "$R" != *"x = 1"* ]]; then
+  report PASS "indented fence stripped"
+else
+  report FAIL "indented fence: got '$R'"
+fi
+
+# Case 11: 300-char cap with CJK input (validates char-based, not byte-based, slicing)
 IN=$(python3 -c "print('中文' * 200)")  # 400 CJK chars = 1200 bytes
 R=$(sanitize_ai_text "$IN")
 CHAR_LEN=$(printf '%s' "$R" | wc -m | tr -d ' ')
