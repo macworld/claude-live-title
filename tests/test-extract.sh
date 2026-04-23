@@ -56,24 +56,25 @@ R=$(extract_last_ai_text "$T")
 [[ "$R" == "second" ]] && report PASS "multi-assistant last text wins" || report FAIL "got '$R'"
 rm -f "$T"
 
-# Text > 300 chars → truncated with "..."
+# Text > 300 chars → returned as-is (no truncation at this layer)
 LONG=$(python3 -c 'print("a" * 350)')
 LINE=$(jq -nc --arg t "$LONG" '{type:"assistant",message:{content:[{type:"text",text:$t}]}}')
 T=$(make_transcript "$LINE
 ")
 R=$(extract_last_ai_text "$T")
-if [[ ${#R} -eq 303 ]] && [[ "${R: -3}" == "..." ]]; then
-  report PASS "long text truncated with ..."
+if [[ ${#R} -eq 350 ]]; then
+  report PASS "long text returned raw (no truncation)"
 else
-  report FAIL "got length ${#R}, tail '${R: -3}'"
+  report FAIL "got length ${#R}, expected 350"
 fi
 rm -f "$T"
 
-# Multi-paragraph → first paragraph only
+# Multi-paragraph → returned as-is (no paragraph split at this layer)
 T=$(make_transcript '{"type":"assistant","message":{"content":[{"type":"text","text":"intent here.\n\nDetail paragraph."}]}}
 ')
 R=$(extract_last_ai_text "$T")
-[[ "$R" == "intent here." ]] && report PASS "multi-paragraph → first only" || report FAIL "got '$R'"
+EXPECTED=$'intent here.\n\nDetail paragraph.'
+[[ "$R" == "$EXPECTED" ]] && report PASS "multi-paragraph returned raw" || report FAIL "got '$R'"
 rm -f "$T"
 
 # Last assistant has only tool_use; earlier has text → falls back to earlier
@@ -85,32 +86,93 @@ R=$(extract_last_ai_text "$T")
 rm -f "$T"
 
 echo ""
-echo "=== format_dialog ==="
+echo "=== extract_goal_message ==="
 
-# USER + AI labels
-R=$(format_dialog "hello
-world" "AI said this")
-EXPECTED="USER: hello
-USER: world
-AI: AI said this"
-[[ "$R" == "$EXPECTED" ]] && report PASS "USER + AI labels" || report FAIL "mismatch: got '$R'"
+# Goal normal case — first user message
+T=$(make_transcript '{"type":"user","message":{"content":"帮我修登录 bug"}}
+{"type":"assistant","message":{"content":[{"type":"text","text":"好的"}]}}
+{"type":"user","message":{"content":"用 redis 还是 memory"}}
+')
+R=$(extract_goal_message "$T")
+[[ "$R" == "帮我修登录 bug" ]] && report PASS "goal = first user message" || report FAIL "got '$R'"
+rm -f "$T"
 
-# USER + empty AI → only USER lines, no trailing AI
-R=$(format_dialog "hello" "")
-[[ "$R" == "USER: hello" ]] && report PASS "empty AI → no AI line" || report FAIL "got '$R'"
+# No user messages → empty
+T=$(make_transcript '{"type":"assistant","message":{"content":[{"type":"text","text":"only AI"}]}}
+')
+R=$(extract_goal_message "$T")
+[[ -z "$R" ]] && report PASS "no user entries → empty" || report FAIL "got '$R'"
+rm -f "$T"
 
-# Multi-line USER → each line prefixed; blank lines dropped
-R=$(format_dialog "line1
-line2
-line3" "")
-EXPECTED="USER: line1
-USER: line2
-USER: line3"
-[[ "$R" == "$EXPECTED" ]] && report PASS "each line prefixed" || report FAIL "got '$R'"
+# First user entry is a tool_result (type:user with content[0].type:tool_result) → skip to next real user text
+T=$(make_transcript '{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t1","content":"output"}]}}
+{"type":"user","message":{"content":"实际的第一条用户消息"}}
+')
+R=$(extract_goal_message "$T")
+[[ "$R" == "实际的第一条用户消息" ]] && report PASS "tool_result skipped, next user text wins" || report FAIL "got '$R'"
+rm -f "$T"
 
-# Only AI, no user content → AI line only
-R=$(format_dialog "" "only ai here")
-[[ "$R" == "AI: only ai here" ]] && report PASS "empty user + AI → AI only" || report FAIL "got '$R'"
+# Content as array with text block → extract text
+T=$(make_transcript '{"type":"user","message":{"content":[{"type":"text","text":"数组形式的第一条"}]}}
+')
+R=$(extract_goal_message "$T")
+[[ "$R" == "数组形式的第一条" ]] && report PASS "array content with text extracted" || report FAIL "got '$R'"
+rm -f "$T"
+
+echo ""
+echo "=== extract_user_messages exclude ==="
+
+# Three user messages; exclude the first → tail returns only the other two
+T=$(make_transcript '{"type":"user","message":{"content":"first goal message"}}
+{"type":"user","message":{"content":"second mid"}}
+{"type":"user","message":{"content":"third tail"}}
+')
+R=$(extract_user_messages "$T" "" "first goal message")
+if [[ "$R" != *"first goal message"* && "$R" == *"second mid"* && "$R" == *"third tail"* ]]; then
+  report PASS "exclude=first removes first from sample"
+else
+  report FAIL "exclude got '$R'"
+fi
+rm -f "$T"
+
+# No exclude arg → behaves as before (first message included)
+T=$(make_transcript '{"type":"user","message":{"content":"first goal message"}}
+{"type":"user","message":{"content":"second mid"}}
+')
+R=$(extract_user_messages "$T" "")
+[[ "$R" == *"first goal message"* ]] && report PASS "no exclude → first still in sample" || report FAIL "no-exclude got '$R'"
+rm -f "$T"
+
+echo ""
+echo "=== format_dialog (goal, users, state) ==="
+
+# Full: GOAL + USER + STATE
+R=$(format_dialog "the goal" $'user one\nuser two' "state content here")
+EXPECTED=$'GOAL: the goal\nUSER: user one\nUSER: user two\nSTATE: state content here'
+[[ "$R" == "$EXPECTED" ]] && report PASS "GOAL + USER + STATE" || report FAIL "full got: $R"
+
+# No STATE
+R=$(format_dialog "the goal" "user one" "")
+EXPECTED=$'GOAL: the goal\nUSER: user one'
+[[ "$R" == "$EXPECTED" ]] && report PASS "GOAL + USER, no STATE" || report FAIL "no-state got: $R"
+
+# GOAL only
+R=$(format_dialog "just the goal" "" "")
+[[ "$R" == "GOAL: just the goal" ]] && report PASS "GOAL only" || report FAIL "goal-only got: $R"
+
+# GOAL + STATE (no USER in between)
+R=$(format_dialog "the goal" "" "state content")
+EXPECTED=$'GOAL: the goal\nSTATE: state content'
+[[ "$R" == "$EXPECTED" ]] && report PASS "GOAL + STATE (skip USER)" || report FAIL "goal+state got: $R"
+
+# Empty USER content with blank line → blank filtered
+R=$(format_dialog "g" $'user one\n\nuser two' "s")
+EXPECTED=$'GOAL: g\nUSER: user one\nUSER: user two\nSTATE: s'
+[[ "$R" == "$EXPECTED" ]] && report PASS "blank USER lines dropped" || report FAIL "blank-drop got: $R"
+
+# All empty → empty output
+R=$(format_dialog "" "" "")
+[[ -z "$R" ]] && report PASS "all-empty → empty" || report FAIL "all-empty got: $R"
 
 echo ""
 echo "================================"

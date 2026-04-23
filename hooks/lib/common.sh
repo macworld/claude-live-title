@@ -174,6 +174,9 @@ extract_user_messages() {
   # pass it in to avoid a one-turn lag (and to have any content at all on the
   # first prompt of a fresh session).
   local current_prompt="${2:-}"
+  # Optional: a goal string to exclude from the sample so GOAL: and USER:
+  # lines don't duplicate the same content in the dialog.
+  local exclude="${3:-}"
 
   local msgs=""
 
@@ -209,52 +212,124 @@ extract_user_messages() {
     fi
   fi
 
+  if [[ -n "$exclude" ]]; then
+    msgs=$(printf '%s' "$msgs" | grep -vxF -- "$exclude" || true)
+  fi
+
   msgs=$(printf '%s' "$msgs" | head -c "$MAX_INPUT_CHARS")
   [[ -z "$msgs" ]] && return 1
   echo "$msgs"
 }
 
+# Return the first substantive user-message text in the transcript.
+# Skips user entries whose content is only tool_result (no text block).
+# Returns empty when the transcript has no user text at all.
+extract_goal_message() {
+  local transcript="$1"
+  jq -r '
+    select(.type == "user")
+    | if (.message.content | type) == "string" then
+        .message.content
+      elif (.message.content | type) == "array" then
+        [.message.content[] | select(.type == "text") | .text] | join(" ")
+      else
+        empty
+      end
+    | select(length > 0)
+  ' "$transcript" 2>/dev/null \
+    | sed '/<system-reminder>/d; /<\/system-reminder>/d' \
+    | grep -v '^<command-' | grep -v '^<local-command' \
+    | sed '/^[[:space:]]*$/d' \
+    | head -n 1 \
+    | head -c "$MAX_INPUT_CHARS"
+}
+
 # ── AI Context Extraction ──
 
-# Return the last AI text block from the transcript, first paragraph only,
-# capped to 300 chars (appends "..." on truncation).
-# Empty output when no assistant text exists anywhere.
-#
-# Used by the title pipeline to give Haiku a single compact signal of
-# current dialog state — resolves intent ambiguity when the user's latest
-# messages are short replies like "ok"/"好"/"continue".
+# Return the raw text of the last assistant text block in the transcript.
+# No paragraph split, no truncation — sanitize_ai_text handles cleanup.
+# Empty when no assistant text exists.
 extract_last_ai_text() {
   local transcript="$1"
   jq -rs '
     [.[] | select(.type == "assistant") | .message.content[]? | select(.type == "text") | .text]
     | .[-1] // empty
-    | (split("\n\n")[0]) as $para
-    | if ($para | length) > 300 then ($para[:300] + "...") else $para end
   ' "$transcript" 2>/dev/null
 }
 
-# Compose a labeled dialog string from USER messages (one per line) and an
-# optional AI text block. Blank USER lines are dropped. If ai_text is empty,
-# no AI: line is appended.
+# Clean an AI text block so it's safe to feed as title-generation context.
+# Pipeline (see 2026-04-23-title-balance-design.md):
+#   1. Strip fenced code blocks
+#   2. Strip inline backticks (keep the content between them)
+#   3. Strip pure-output, stack-frame, and stdout/stderr label lines
+#   4. Collapse multiple blank lines, trim leading blanks
+#   5. Substance check: <30 non-whitespace bytes remaining → return empty
+#   6. Cap at 300 characters, append "..." on truncation
+#
+# Note: step 5 counts bytes (via wc -c on whitespace-stripped input) while
+# step 6 caps by bash characters (${var:0:N}). The units intentionally differ:
+# the substance floor is "enough bytes to be meaningful" (30 bytes ≈ 10 CJK
+# chars ≈ 30 ASCII chars), while the ceiling is "enough characters of reading
+# material for Haiku" regardless of encoding.
+sanitize_ai_text() {
+  local raw="$1"
+  [[ -z "$raw" ]] && return 0
+  local cleaned
+  # Step 1: strip fenced code blocks (whole fence including delimiters)
+  cleaned=$(printf '%s' "$raw" | awk '
+    /^[[:space:]]*```/ { in_fence = !in_fence; next }
+    !in_fence
+  ')
+  # Step 2: remove inline backticks (keep content)
+  cleaned=$(printf '%s' "$cleaned" | sed 's/`//g')
+  # Step 3: strip pure-output / stack-frame lines
+  cleaned=$(printf '%s' "$cleaned" | sed -E '
+    /^[[:space:]]*Traceback/d
+    /^[[:space:]]*File "[^"]+", line [0-9]+/d
+    /^[[:space:]]*at [A-Za-z_][A-Za-z0-9_.]*[[:space:]]*\([^)]*\)/d
+    /^[[:space:]]*\$[[:space:]]+/d
+    /^[[:space:]]*>[[:space:]]+/d
+    /^[[:space:]]*stderr:/d
+    /^[[:space:]]*stdout:/d
+  ')
+  # Step 4: collapse multiple blank lines to one; trim leading blanks
+  cleaned=$(printf '%s\n' "$cleaned" \
+    | awk 'NF { blank = 0; print; next } !blank { print; blank = 1 }' \
+    | awk '/./ { found = 1 } found')
+  # Step 5: substance check (bytes, whitespace excluded)
+  local substance
+  substance=$(printf '%s' "$cleaned" | tr -d '[:space:]' | wc -c | tr -d ' ')
+  if [[ "$substance" -lt 30 ]]; then
+    return 0
+  fi
+  # Step 6: 300-char cap (bash ${var:0:N} slices by chars under UTF-8)
+  if [[ ${#cleaned} -gt 300 ]]; then
+    cleaned="${cleaned:0:300}..."
+  fi
+  printf '%s' "$cleaned"
+}
+
+# Compose a labeled dialog from GOAL (single line), USER messages (one per
+# line, blank lines dropped), and an optional STATE line. When a field is
+# empty, its label is omitted — no empty "STATE:" line, etc.
 #
 # Output shape:
+#   GOAL: ...
 #   USER: ...
 #   USER: ...
-#   AI: ...
+#   STATE: ...
 format_dialog() {
-  local user_msgs="$1" ai_text="$2"
-  local out=""
+  local goal="$1" user_msgs="$2" state="$3"
+  local parts=()
+  [[ -n "$goal" ]] && parts+=("GOAL: $goal")
   if [[ -n "$user_msgs" ]]; then
-    out=$(printf '%s' "$user_msgs" | awk 'NF {print "USER: " $0}')
+    local user_block
+    user_block=$(printf '%s' "$user_msgs" | awk 'NF { print "USER: " $0 }')
+    [[ -n "$user_block" ]] && parts+=("$user_block")
   fi
-  if [[ -n "$ai_text" ]]; then
-    if [[ -n "$out" ]]; then
-      out=$(printf '%s\nAI: %s' "$out" "$ai_text")
-    else
-      out="AI: $ai_text"
-    fi
-  fi
-  printf '%s' "$out"
+  [[ -n "$state" ]] && parts+=("STATE: $state")
+  local IFS=$'\n'
+  printf '%s' "${parts[*]}"
 }
 
 # ── Title Generation ──
@@ -283,16 +358,21 @@ generate_title() {
 
   local task_prompt="Generate a concrete title for the following Claude Code session.
 
-Budget: target roughly 70% of ${MAX_LENGTH} display columns (CJK=2 columns, Latin=1). Do not exceed the limit. Do not go overly terse — utilise the budget.
+Budget: target roughly 70% of ${MAX_LENGTH} display columns (CJK=2, Latin=1). Don't exceed. Don't go overly terse.
 
-Format: messages are prefixed USER: / AI:. Multiple USER: lines in chronological order. At most one AI: line — the latest state of the assistant's response.
+Labels:
+- GOAL: the session's original intent (first user message).
+- USER: later user messages in chronological order.
+- STATE: the assistant's latest substantive output (already sanitized, supplementary context only).
 
-Rules:
-- Prefer SPECIFIC nouns/verbs (file names, function names, concrete actions) over abstract ones.
-- Weight later messages heavier — the direction may have drifted from the initial request.
-- When a USER: line is a short reply (ok, 好, continue, 嗯), the actual intent lives in the AI: line — use it.
-- Do NOT merge unrelated topics into a nonsense compound. Pick the current/active direction. If the AI: line mentions recently completed work, preserving both topics is fine.
-- ${lang_instr}"
+How to pick the topic:
+1. GOAL anchors the session's frame — what the session is fundamentally about.
+2. The LAST substantive USER message anchors the current focus — weight it most heavily when it's non-trivial.
+3. Earlier USER messages show how the conversation evolved; use them to disambiguate or refine.
+4. STATE is topic-source ONLY when the last USER is a short filler reply (ok, 好, continue, 嗯, go, yes, 行, sure, do it). Otherwise STATE is background context — do not derive the topic from it.
+5. Prefer SPECIFIC nouns/verbs (file names, function names, concrete actions) over abstract ones.
+6. Do NOT merge unrelated topics into a compound phrase.
+7. ${lang_instr}"
 
   log "Generating title: model=$MODEL language=$LANGUAGE"
 

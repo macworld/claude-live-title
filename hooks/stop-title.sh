@@ -55,13 +55,16 @@ fi
 touch "$MARKER"
 
 # ── Extract, generate, write ──
-USER_MSGS=$(extract_user_messages "$TRANSCRIPT_PATH" || true)
-if [[ -z "$USER_MSGS" ]]; then
+GOAL=$(extract_goal_message "$TRANSCRIPT_PATH")
+USER_MSGS=$(extract_user_messages "$TRANSCRIPT_PATH" "" "$GOAL" || true)
+AI_RAW=$(extract_last_ai_text "$TRANSCRIPT_PATH")
+AI_TEXT=$(sanitize_ai_text "$AI_RAW")
+DIALOG=$(format_dialog "$GOAL" "$USER_MSGS" "$AI_TEXT")
+
+if [[ -z "$DIALOG" ]]; then
   rm -f "$MARKER"
   exit 0
 fi
-AI_TEXT=$(extract_last_ai_text "$TRANSCRIPT_PATH")
-DIALOG=$(format_dialog "$USER_MSGS" "$AI_TEXT")
 
 TITLE_RAW=$(generate_title "$DIALOG" || true)
 if [[ -z "$TITLE_RAW" ]]; then
