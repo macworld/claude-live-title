@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-04-25
+
 ### Changed
 - Dialog format for title generation moved from flat `USER:` / `AI:` to three-tier `GOAL:` / `USER:` / `STATE:`. `GOAL` is the first user message (session's original intent); `STATE` is the sanitized last AI text. Prompt rules now treat STATE as background context except when the last USER message is a short filler reply (ok, 好, continue, 嗯, go, yes, 行, sure, do it).
 - AI context is now sanitized before reaching Haiku: fenced code blocks, inline backticks, Python / JS stack frames, and `$`/`>` prompt lines are stripped. If under 30 bytes of substance remain, the `STATE:` line is dropped entirely. Fixes titles that previously copied `Traceback` lines or shell-output fragments from the last AI paragraph.
