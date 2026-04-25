@@ -119,6 +119,44 @@ R=$(extract_goal_message "$T")
 [[ "$R" == "数组形式的第一条" ]] && report PASS "array content with text extracted" || report FAIL "got '$R'"
 rm -f "$T"
 
+# Multi-line first user message → flattened to a single line, all content preserved
+T=$(make_transcript '{"type":"user","message":{"content":"帮我修\n登录 bug"}}
+{"type":"user","message":{"content":"第二条"}}
+')
+R=$(extract_goal_message "$T")
+[[ "$R" == "帮我修 登录 bug" ]] && report PASS "multi-line goal flattened to single line" || report FAIL "got '$R'"
+rm -f "$T"
+
+# Multi-line goal with a fenced block → fence text preserved verbatim (sanitize is not goal's job)
+T=$(make_transcript '{"type":"user","message":{"content":"帮我看这段\n```python\nx=1\n```\n出错了"}}
+')
+R=$(extract_goal_message "$T")
+if [[ "$R" == *"帮我看这段"* && "$R" == *'```python'* && "$R" == *"x=1"* && "$R" == *"出错了"* && "$R" != *$'\n'* ]]; then
+  report PASS "multi-line goal with fence preserved verbatim and flattened"
+else
+  report FAIL "fence-preservation got '$R'"
+fi
+rm -f "$T"
+
+# system-reminder block stripped, real content preserved (block-mode strip)
+T=$(make_transcript '{"type":"user","message":{"content":"<system-reminder>\nrunning hook X\nmore reminder text\n</system-reminder>\n实际的用户问题"}}
+')
+R=$(extract_goal_message "$T")
+if [[ "$R" == "实际的用户问题" && "$R" != *"running hook X"* && "$R" != *"system-reminder"* ]]; then
+  report PASS "system-reminder block stripped from goal"
+else
+  report FAIL "reminder-strip got '$R'"
+fi
+rm -f "$T"
+
+# Multi-line tool_result-only first entry skipped, multi-line second entry returned as flat goal
+T=$(make_transcript '{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t1","content":"some output"}]}}
+{"type":"user","message":{"content":"第二条\n包含两行"}}
+')
+R=$(extract_goal_message "$T")
+[[ "$R" == "第二条 包含两行" ]] && report PASS "tool_result skipped, multi-line next entry flattened" || report FAIL "got '$R'"
+rm -f "$T"
+
 echo ""
 echo "=== extract_user_messages exclude ==="
 

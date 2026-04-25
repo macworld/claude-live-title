@@ -221,26 +221,35 @@ extract_user_messages() {
   echo "$msgs"
 }
 
-# Return the first substantive user-message text in the transcript.
-# Skips user entries whose content is only tool_result (no text block).
-# Returns empty when the transcript has no user text at all.
+# Collapse any whitespace (newlines, tabs, CR, runs of spaces) in stdin to
+# single spaces, trim leading/trailing space. Used to flatten multi-line
+# message text into one labeled line for the dialog feed (per design call D1).
+_flatten_oneline() {
+  tr '\n\r\t' '   ' | tr -s ' ' | sed -e 's/^ //' -e 's/ $//'
+}
+
+# Return the first substantive user-message text in the transcript, flattened
+# to a single line. Skips user entries whose content is only tool_result (no
+# text block). Drops `<system-reminder>...</system-reminder>` blocks (the
+# harness embeds these in user content). Returns empty when the transcript
+# has no user text at all.
 extract_goal_message() {
   local transcript="$1"
-  jq -r '
-    select(.type == "user")
-    | if (.message.content | type) == "string" then
-        .message.content
-      elif (.message.content | type) == "array" then
-        [.message.content[] | select(.type == "text") | .text] | join(" ")
-      else
-        empty
-      end
-    | select(length > 0)
+  jq -rs '
+    [.[] | select(.type == "user")
+          | if (.message.content | type) == "string" then
+              .message.content
+            elif (.message.content | type) == "array" then
+              ([.message.content[] | select(.type == "text") | .text] | join(" "))
+            else
+              empty
+            end
+          | select(. != null and . != "")]
+    | .[0] // empty
   ' "$transcript" 2>/dev/null \
-    | sed '/<system-reminder>/d; /<\/system-reminder>/d' \
-    | grep -v '^<command-' | grep -v '^<local-command' \
-    | sed '/^[[:space:]]*$/d' \
-    | head -n 1 \
+    | sed '/<system-reminder>/,/<\/system-reminder>/d' \
+    | grep -Ev '^<(local-)?command-' \
+    | _flatten_oneline \
     | head -c "$MAX_INPUT_CHARS"
 }
 
