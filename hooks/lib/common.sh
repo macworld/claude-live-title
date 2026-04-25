@@ -470,20 +470,31 @@ How to pick the topic:
 
 clean_title() {
   local raw="$1"
-  # Strip prefixes, quotes, trailing punctuation.
-  # Length is controlled by the AI prompt + generate_title sanity check (200 chars),
-  # so no hard truncation here — avoids locale-dependent cut -c issues with CJK.
-  printf '%s' "$raw" | tr -d '\n' \
-    | sed 's/^[[:space:]]*//' \
-    | sed 's/^[Tt]itle[：:][[:space:]]*//' \
-    | sed 's/^[Ss]ession [Tt]itle[：:][[:space:]]*//' \
-    | sed 's/^标题[：:][[:space:]]*//' \
-    | sed 's/^会话标题[：:][[:space:]]*//' \
-    | sed 's/^タイトル[：:][[:space:]]*//' \
-    | sed 's/^제목[：:][[:space:]]*//' \
-    | sed 's/^["'"'"'「《]//; s/["'"'"'」》]$//' \
-    | sed 's/[。！？，、；：.!?,;:]$//' \
-    | sed 's/[[:space:]]*$//'
+  # Strip prefixes, outer quotes, and trailing punctuation in a fixed-point
+  # loop so combined wrapping (e.g. `"Title: Fix."` or `标题：「修复」。`) gets
+  # peeled fully — single-pass would only remove the outermost layer.
+  # Length is controlled upstream by the AI prompt + generate_title sanity
+  # check (200 chars), so no hard truncation here.
+  local cleaned prev
+  cleaned=$(printf '%s' "$raw" | tr -d '\n')
+  while true; do
+    prev="$cleaned"
+    cleaned=$(printf '%s' "$cleaned" | sed -E '
+      s/^[[:space:]]+//
+      s/^[Tt]itle[：:][[:space:]]*//
+      s/^[Ss]ession [Tt]itle[：:][[:space:]]*//
+      s/^标题[：:][[:space:]]*//
+      s/^会话标题[：:][[:space:]]*//
+      s/^タイトル[：:][[:space:]]*//
+      s/^제목[：:][[:space:]]*//
+      s/^["'"'"'「《]//
+      s/["'"'"'」》]$//
+      s/[。！？，、；：.!?,;:]+$//
+      s/[[:space:]]+$//
+    ')
+    [[ "$cleaned" == "$prev" ]] && break
+  done
+  printf '%s' "$cleaned"
 }
 
 # ── Write Title to Transcript ──
