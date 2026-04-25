@@ -112,6 +112,17 @@ else
   report FAIL "CJK cap: got ${CHAR_LEN} chars, tail '${R: -3}'"
 fi
 
+# Case 12: CRLF line endings (Windows-origin transcripts) — fence stripped,
+# no \r leaks to downstream consumers
+IN=$'preamble line\r\n```bash\r\n$ ls\r\nfile1\r\n```\r\nclosing summary long enough to pass the substance gate threshold\r\n'
+R=$(sanitize_ai_text "$IN")
+if [[ "$R" == *"preamble line"* && "$R" == *"closing summary"* \
+   && "$R" != *'$ ls'* && "$R" != *'```'* && "$R" != *$'\r'* ]]; then
+  report PASS "CRLF fence stripped, no carriage returns leak"
+else
+  report FAIL "CRLF fence: got '$R'"
+fi
+
 echo ""
 echo "================================"
 echo "Results: $PASS passed, $FAIL failed"

@@ -338,8 +338,10 @@ sanitize_ai_text() {
   local raw="$1"
   [[ -z "$raw" ]] && return 0
   local cleaned
-  # Step 1: strip fenced code blocks (whole fence including delimiters)
-  cleaned=$(printf '%s' "$raw" | awk '
+  # Step 1: strip fenced code blocks (whole fence including delimiters).
+  # `tr -d '\r'` first so Windows-origin transcripts (CRLF line endings) get
+  # the same treatment as LF — keeps stray carriage returns out of STATE.
+  cleaned=$(printf '%s' "$raw" | tr -d '\r' | awk '
     /^[[:space:]]*```/ { in_fence = !in_fence; next }
     !in_fence
   ')
