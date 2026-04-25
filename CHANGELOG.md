@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.2.1] - 2026-04-25
+
+### Fixed
+- Multi-line first user prompts no longer get truncated to their first physical line as the `GOAL:` anchor. `extract_goal_message` now returns the whole first user message, and `format_dialog` plus `extract_user_messages` all flatten via a shared `_flatten_oneline` helper so each tier of the dialog is exactly one labeled line. Restores GOAL as a reliable session-intent anchor for sessions that start with a multi-paragraph prompt (pasted stack traces, numbered requirements, etc.).
+- `<system-reminder>`, `<local-command-stdout>`, and `<local-command-stderr>` blocks are now stripped as full multi-line regions from user content. The previous line-mode strip only removed the open/close tag lines and let the body leak into `USER:` / `GOAL:` lines.
+- 300-char `STATE:` cap and `MAX_INPUT_CHARS` extraction cap are UTF-8 character-aware via a new portable `_cap_chars` helper (`LC_ALL=C awk`, manual UTF-8 lead-byte detection). Previously `${var:0:N}` was char-based on Linux bash 5+ but byte-based on macOS system bash 3.2, and `head -c` was always byte-based — both could leave dangling bytes mid-CJK character.
+- Sanitize pipeline strips carriage returns up front, so Windows-origin transcripts (CRLF) no longer leak `\r` bytes into `STATE:`.
+- Stop-hook dedup marker is now a directory created via `mkdir` (atomic) rather than a `touch` file with a check-then-touch window. Concurrent Stop invocations can no longer both proceed past the dedup check.
+- Stop hook detects existing `custom-title` records via `jq -e 'select(.type=="custom-title")'` instead of substring `grep`. Removes a theoretical false positive on user content quoting the type tag.
+
 ## [1.2.0] - 2026-04-25
 
 ### Changed
