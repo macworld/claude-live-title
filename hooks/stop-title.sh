@@ -90,6 +90,7 @@ if [[ -z "$TITLE" ]]; then
 fi
 
 write_title "$TRANSCRIPT_PATH" "$TITLE" "$SESSION_ID"
+log_replay_event "$DIALOG" "$TITLE" "$SESSION_ID"
 log "Stop hook: title written"
 
 # ── Clean up live hook temp files ──

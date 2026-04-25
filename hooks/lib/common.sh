@@ -49,6 +49,23 @@ log() {
   fi
 }
 
+# Append one structured JSON line to the debug log capturing the dialog
+# fed to Haiku and the cleaned title that came back. Only emitted when
+# DEBUG=true. Used by `bin/promote-fixture.sh` to turn a bad title into a
+# repeatable test fixture without hand-copying transcript content.
+log_replay_event() {
+  if [[ "$DEBUG" == "true" ]]; then
+    local dialog="$1" title="$2" session_id="${3-}"
+    jq -nc \
+      --arg ts "$(date -Iseconds 2>/dev/null || date +%Y-%m-%dT%H:%M:%S%z)" \
+      --arg sid "$session_id" \
+      --arg dialog "$dialog" \
+      --arg title "$title" \
+      '{event:"title-generated", ts:$ts, session_id:$sid, dialog:$dialog, title:$title}' \
+      >> "$DEBUG_LOG"
+  fi
+}
+
 # ── Config Loading ──
 load_config() {
   local config_dir="${CLAUDE_PLUGIN_DATA:-$HOME/.claude/plugins/data/claude-live-title}"

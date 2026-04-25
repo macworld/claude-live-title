@@ -97,6 +97,7 @@ if [[ -z "$TITLE" ]]; then
 fi
 
 write_title "$TRANSCRIPT_PATH" "$TITLE" "$SESSION_ID"
+log_replay_event "$DIALOG" "$TITLE" "$SESSION_ID"
 
 # ── Update state AFTER successful generation ──
 echo "$NOW $TOTAL_MSGS" > "$STATE_FILE"
