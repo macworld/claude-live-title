@@ -142,6 +142,79 @@ else
 fi
 
 echo ""
+echo "=== sanitize-line-rules.tsv (data-driven catalog) ==="
+
+RULES="$SCRIPT_DIR/hooks/lib/sanitize-line-rules.tsv"
+if [[ ! -r "$RULES" ]]; then
+  report FAIL "TSV catalog not readable at $RULES"
+else
+  while IFS=$'\t' read -r id pattern matches no_match; do
+    case "${id-}" in '' | '#'*) continue ;; esac
+    [[ -z "$pattern" ]] && continue
+    R=$(printf '%s\n' "$matches" | sed -E "/${pattern}/d")
+    if [[ -z "$R" ]]; then
+      report PASS "[$id] match-example dropped"
+    else
+      report FAIL "[$id] match-example kept: '$R'"
+    fi
+    R=$(printf '%s\n' "$no_match" | sed -E "/${pattern}/d")
+    if [[ "$R" == "$no_match" ]]; then
+      report PASS "[$id] non-match preserved"
+    else
+      report FAIL "[$id] non-match dropped"
+    fi
+  done < "$RULES"
+fi
+
+echo ""
+echo "=== sanitize_ai_text integration with new noise shapes ==="
+
+# Rust panic line stripped, prose surrounding survives the substance gate
+IN=$(cat <<'EOF'
+修了 Cargo 项目的入口模块
+thread 'main' panicked at src/main.rs:42:5
+note: run with RUST_BACKTRACE=1
+看了下是 unwrap 用错了已经修复
+EOF
+)
+R=$(sanitize_ai_text "$IN")
+if [[ "$R" == *"修了 Cargo"* && "$R" == *"unwrap 用错了"* && "$R" != *"panicked at"* ]]; then
+  report PASS "Rust panic stripped, summary survives"
+else
+  report FAIL "Rust integration: '$R'"
+fi
+
+# Go panic stripped, surrounding prose survives
+IN=$(cat <<'EOF'
+帮我看了下服务为什么挂
+panic: runtime error: invalid memory address
+goroutine 1 [running]:
+问题是空指针解引用，已加了 nil 检查保护
+EOF
+)
+R=$(sanitize_ai_text "$IN")
+if [[ "$R" == *"帮我看了下服务"* && "$R" == *"已加了 nil 检查保护"* && "$R" != *"panic: runtime"* ]]; then
+  report PASS "Go panic stripped, summary survives"
+else
+  report FAIL "Go integration: '$R'"
+fi
+
+# Ruby backtrace lines stripped
+IN=$(cat <<'EOF'
+调试 Rails 控制器的渲染问题
+from app/controllers/users.rb:42:in 'show'
+from config/routes.rb:10:in 'block in routes'
+是 strong params 漏了 :avatar 字段
+EOF
+)
+R=$(sanitize_ai_text "$IN")
+if [[ "$R" == *"调试 Rails 控制器"* && "$R" == *"strong params 漏了"* && "$R" != *"app/controllers"* ]]; then
+  report PASS "Ruby backtrace stripped, summary survives"
+else
+  report FAIL "Ruby integration: '$R'"
+fi
+
+echo ""
 echo "================================"
 echo "Results: $PASS passed, $FAIL failed"
 [[ "$FAIL" -eq 0 ]] && echo "All tests passed!" || exit 1

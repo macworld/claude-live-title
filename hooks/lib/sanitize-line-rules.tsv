@@ -1,0 +1,31 @@
+# sanitize-line-rules.tsv — line-level drop rules used by sanitize_ai_text
+# step 3 (see hooks/lib/common.sh). Lines matching `pattern` are removed
+# from the AI text BEFORE the dialog reaches Haiku, so transient noise
+# (stack frames, shell output, error labels) doesn't leak into titles.
+#
+# Format (TAB-separated, four fields):
+#   id <TAB> pattern <TAB> matching_example <TAB> non_matching_example
+#
+# - id              short name; used in test failure messages
+# - pattern         POSIX ERE regex; if a line matches, the WHOLE line drops
+# - matching_example   one line that the pattern MUST drop
+# - non_matching_example  one line of plain prose that MUST be kept
+#
+# Adding a new noise shape: append one row. test-sanitize.sh iterates this
+# file and asserts both directions per row, so a faulty pattern is caught
+# without touching code. Stateful logic (fence toggle, blank collapse,
+# substance gate, length cap) deliberately stays in code (per design note
+# 2026-04-25-title-correctness-and-testing.md, design call D3).
+#
+# Lines starting with `#` and blank lines are ignored.
+shell_prompt	^[[:space:]]*\$[[:space:]]+	$ npm test	cost is $5 per call
+shell_quote	^[[:space:]]*>[[:space:]]+	> some quoted output	greater than five
+stdout_label	^[[:space:]]*stdout:	stdout: ok	the stdout: prefix means
+stderr_label	^[[:space:]]*stderr:	stderr: failed	this is stderr: noise
+py_traceback	^[[:space:]]*Traceback	Traceback (most recent call last):	a Traceback line is informative
+py_frame	^[[:space:]]*File "[^"]+", line [0-9]+	  File "x.py", line 5, in foo	the file at line one is fine
+js_java_frame	^[[:space:]]*at [A-Za-z_][A-Za-z0-9_.$]*[[:space:]]*\([^)]*\)	    at Foo$inner.bar (file.js:1:2)	at the top of the file
+rust_panic	^[[:space:]]*thread '[^']*' panicked at	thread 'main' panicked at src/main.rs:1:2	I thought it might have panicked at startup
+go_panic	^[[:space:]]*panic:[[:space:]]	panic: runtime error: invalid memory address	the team is in panic: deadline today
+ruby_frame	^[[:space:]]*from [^[:space:]]+:[0-9]+:in	from app/models/user.rb:42:in 'foo'	I read it from the docs
+node_unhandled	^[[:space:]]*UnhandledPromiseRejection	UnhandledPromiseRejection: missing await	addressed an unhandled rejection earlier

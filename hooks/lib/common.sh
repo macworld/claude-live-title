@@ -6,6 +6,11 @@
 MAX_INPUT_CHARS=8000
 DEBUG_LOG="/tmp/claude-live-title-debug.log"
 
+# Resolve once at source time so callers anywhere in the repo can find the
+# sanitize line-rule catalog regardless of cwd.
+COMMON_SH_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SANITIZE_RULES_FILE="${COMMON_SH_DIR}/sanitize-line-rules.tsv"
+
 # ── Session ID Sanitization ──
 # Derive a filesystem-safe key from session_id via SHA-256 (collision-free)
 sanitize_session_id() {
@@ -347,16 +352,24 @@ sanitize_ai_text() {
   ')
   # Step 2: remove inline backticks (keep content)
   cleaned=$(printf '%s' "$cleaned" | sed 's/`//g')
-  # Step 3: strip pure-output / stack-frame lines
-  cleaned=$(printf '%s' "$cleaned" | sed -E '
-    /^[[:space:]]*Traceback/d
-    /^[[:space:]]*File "[^"]+", line [0-9]+/d
-    /^[[:space:]]*at [A-Za-z_][A-Za-z0-9_.]*[[:space:]]*\([^)]*\)/d
-    /^[[:space:]]*\$[[:space:]]+/d
-    /^[[:space:]]*>[[:space:]]+/d
-    /^[[:space:]]*stderr:/d
-    /^[[:space:]]*stdout:/d
-  ')
+  # Step 3: strip pure-output / stack-frame lines, driven by the data
+  # catalog at $SANITIZE_RULES_FILE. Each non-comment row contributes one
+  # /pattern/d to the sed script. Adding a new noise shape (Rust panic, Go
+  # stack, Ruby backtrace, etc.) is one TSV row, no code change. If the
+  # catalog is missing we skip step 3 entirely rather than fail the hook.
+  if [[ -r "$SANITIZE_RULES_FILE" ]]; then
+    local _sed_script="" _id _pattern _rest
+    while IFS=$'\t' read -r _id _pattern _rest; do
+      case "${_id-}" in '' | '#'*) continue ;; esac
+      [[ -z "$_pattern" ]] && continue
+      _sed_script+="/${_pattern}/d"$'\n'
+    done < "$SANITIZE_RULES_FILE"
+    if [[ -n "$_sed_script" ]]; then
+      cleaned=$(printf '%s' "$cleaned" | sed -E "$_sed_script")
+    fi
+  else
+    log "WARN: sanitize-line-rules.tsv missing at $SANITIZE_RULES_FILE; line-drop step skipped"
+  fi
   # Step 4: collapse multiple blank lines to one; trim leading blanks
   cleaned=$(printf '%s\n' "$cleaned" \
     | awk 'NF { blank = 0; print; next } !blank { print; blank = 1 }' \
