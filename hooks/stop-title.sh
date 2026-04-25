@@ -39,20 +39,29 @@ if [[ -d "$LOCK_DIR" ]]; then
 fi
 
 # ── Dedup: skip if already named by this Stop hook ──
+# Marker is a directory so creation is atomic (mkdir succeeds for exactly one
+# caller in a concurrent-Stop race); the previous file-marker had a TOCTOU
+# window between the existence check and the touch.
 MARKER="/tmp/claude-live-title-named-${SAFE_ID}"
-[[ -f "$MARKER" ]] && { log "Already named (marker exists)"; exit 0; }
+[[ -d "$MARKER" ]] && { log "Already named (marker exists)"; exit 0; }
 
 # ── Skip if live hook already wrote a custom-title ──
-if grep -q '"type":"custom-title"' "$TRANSCRIPT_PATH" 2>/dev/null; then
-  touch "$MARKER"
+# `jq -e` exits 0 only when at least one record matches the selector, so
+# this is a structured replacement for the previous substring grep (which
+# could false-positive on user content that happened to quote the type tag).
+if jq -e 'select(.type=="custom-title")' "$TRANSCRIPT_PATH" >/dev/null 2>&1; then
+  mkdir -p "$MARKER" 2>/dev/null || true
   log "Already named (custom-title found in transcript)"
   rm -f "/tmp/claude-live-title-state-${SAFE_ID}"
   rm -rf "/tmp/claude-live-title-lock-${SAFE_ID}"
   exit 0
 fi
 
-# ── Create marker to prevent concurrent runs ──
-touch "$MARKER"
+# ── Atomically claim the marker to prevent concurrent Stop runs ──
+if ! mkdir "$MARKER" 2>/dev/null; then
+  log "Marker claimed by concurrent Stop hook"
+  exit 0
+fi
 
 # ── Extract, generate, write ──
 GOAL=$(extract_goal_message "$TRANSCRIPT_PATH")
@@ -62,20 +71,20 @@ AI_TEXT=$(sanitize_ai_text "$AI_RAW")
 DIALOG=$(format_dialog "$GOAL" "$USER_MSGS" "$AI_TEXT")
 
 if [[ -z "$DIALOG" ]]; then
-  rm -f "$MARKER"
+  rm -rf "$MARKER"
   exit 0
 fi
 
 TITLE_RAW=$(generate_title "$DIALOG" || true)
 if [[ -z "$TITLE_RAW" ]]; then
-  rm -f "$MARKER"
+  rm -rf "$MARKER"
   log "Title generation failed or empty"
   exit 0
 fi
 
 TITLE=$(clean_title "$TITLE_RAW")
 if [[ -z "$TITLE" ]]; then
-  rm -f "$MARKER"
+  rm -rf "$MARKER"
   log "Title empty after cleanup"
   exit 0
 fi
