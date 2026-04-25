@@ -233,7 +233,7 @@ extract_user_messages() {
     fi
   fi
 
-  msgs=$(printf '%s' "$msgs" | head -c "$MAX_INPUT_CHARS")
+  msgs=$(printf '%s' "$msgs" | _cap_chars "$MAX_INPUT_CHARS" "")
   [[ -z "$msgs" ]] && return 1
   echo "$msgs"
 }
@@ -243,6 +243,43 @@ extract_user_messages() {
 # message text into one labeled line for the dialog feed (per design call D1).
 _flatten_oneline() {
   tr '\n\r\t' '   ' | tr -s ' ' | sed -e 's/^ //' -e 's/ $//'
+}
+
+# Truncate stdin to at most $1 UTF-8 characters (NOT bytes). Appends $2 (or
+# "..." if omitted) when truncation occurs; pass an explicit empty string to
+# suppress the marker. Behaviour is identical on Linux bash 5 / macOS bash 3.2
+# and on GNU/BSD awk because the awk runs under LC_ALL=C in byte mode and
+# manually counts UTF-8 lead bytes (high bits != 10xxxxxx). Replaces the
+# locale-dependent `${var:0:N}` and byte-mode `head -c` previously used at
+# the 300-char and MAX_INPUT_CHARS caps.
+_cap_chars() {
+  local max="$1" suffix="${2-...}"
+  LC_ALL=C awk -v n="$max" -v suffix="$suffix" '
+    BEGIN {
+      for (i = 0; i < 256; i++) ord[sprintf("%c", i)] = i
+      buf = ""
+    }
+    { buf = (NR > 1 ? buf "\n" : "") $0 }
+    END {
+      out = ""
+      chars = 0
+      truncated = 0
+      L = length(buf)
+      for (i = 1; i <= L; i++) {
+        c = substr(buf, i, 1)
+        v = ord[c]
+        # UTF-8 continuation bytes are 10xxxxxx (0x80-0xBF). Anything else
+        # (ASCII or a UTF-8 lead byte) starts a new character.
+        if (v < 0x80 || v >= 0xC0) {
+          if (chars >= n) { truncated = 1; break }
+          chars++
+        }
+        out = out c
+      }
+      if (truncated) printf "%s%s", out, suffix
+      else printf "%s", out
+    }
+  '
 }
 
 # Return the first substantive user-message text in the transcript, flattened
@@ -267,7 +304,7 @@ extract_goal_message() {
     | sed '/<system-reminder>/,/<\/system-reminder>/d' \
     | grep -Ev '^<(local-)?command-' \
     | _flatten_oneline \
-    | head -c "$MAX_INPUT_CHARS"
+    | _cap_chars "$MAX_INPUT_CHARS" ""
 }
 
 # ── AI Context Extraction ──
@@ -293,10 +330,10 @@ extract_last_ai_text() {
 #   6. Cap at 300 characters, append "..." on truncation
 #
 # Note: step 5 counts bytes (via wc -c on whitespace-stripped input) while
-# step 6 caps by bash characters (${var:0:N}). The units intentionally differ:
-# the substance floor is "enough bytes to be meaningful" (30 bytes ≈ 10 CJK
-# chars ≈ 30 ASCII chars), while the ceiling is "enough characters of reading
-# material for Haiku" regardless of encoding.
+# step 6 caps by UTF-8 character count via _cap_chars. The units intentionally
+# differ: the substance floor is "enough bytes to be meaningful" (30 bytes ≈
+# 10 CJK chars ≈ 30 ASCII chars), while the ceiling is "enough characters of
+# reading material for Haiku" regardless of encoding or platform bash version.
 sanitize_ai_text() {
   local raw="$1"
   [[ -z "$raw" ]] && return 0
@@ -328,11 +365,9 @@ sanitize_ai_text() {
   if [[ "$substance" -lt 30 ]]; then
     return 0
   fi
-  # Step 6: 300-char cap (bash ${var:0:N} slices by chars under UTF-8)
-  if [[ ${#cleaned} -gt 300 ]]; then
-    cleaned="${cleaned:0:300}..."
-  fi
-  printf '%s' "$cleaned"
+  # Step 6: 300-char cap via _cap_chars (UTF-8 char count, not bytes; bash
+  # 3.2 / BSD-tools safe).
+  printf '%s' "$cleaned" | _cap_chars 300
 }
 
 # Compose a labeled dialog from GOAL (single line), USER messages (one per

@@ -158,6 +158,45 @@ R=$(extract_goal_message "$T")
 rm -f "$T"
 
 echo ""
+echo "=== _cap_chars (UTF-8 char-aware truncation) ==="
+
+# ASCII shorter than max — no change
+R=$(printf '%s' "hello" | _cap_chars 10)
+[[ "$R" == "hello" ]] && report PASS "ASCII < max unchanged" || report FAIL "got '$R'"
+
+# ASCII exactly max — boundary, no truncation
+R=$(printf '%s' "hello" | _cap_chars 5)
+[[ "$R" == "hello" ]] && report PASS "ASCII == max unchanged" || report FAIL "got '$R'"
+
+# ASCII longer than max — appends "..."
+R=$(printf '%s' "hello world" | _cap_chars 5)
+[[ "$R" == "hello..." ]] && report PASS "ASCII > max truncated with ..." || report FAIL "got '$R'"
+
+# CJK longer than max — char-aware (not byte) truncation
+R=$(printf '%s' "中文中文" | _cap_chars 2)
+[[ "$R" == "中文..." ]] && report PASS "CJK truncation char-aware" || report FAIL "got '$R'"
+
+# Mixed ASCII + CJK at boundary — no mid-char split
+R=$(printf '%s' "ASCII中文" | _cap_chars 6)
+[[ "$R" == "ASCII中..." ]] && report PASS "mixed ASCII+CJK boundary safe" || report FAIL "got '$R'"
+
+# Mixed input exactly at max
+R=$(printf '%s' "ASCII中文" | _cap_chars 7)
+[[ "$R" == "ASCII中文" ]] && report PASS "mixed exactly at max" || report FAIL "got '$R'"
+
+# Empty input → empty output
+R=$(printf '' | _cap_chars 10)
+[[ -z "$R" ]] && report PASS "empty input → empty" || report FAIL "got '$R'"
+
+# Suffix-override: empty suffix on truncation
+R=$(printf '%s' "hello world" | _cap_chars 5 '')
+[[ "$R" == "hello" ]] && report PASS "empty suffix omits trailing marker" || report FAIL "got '$R'"
+
+# Run under LC_ALL=C — must still produce char-correct CJK truncation
+R=$(LC_ALL=C bash -c "source $SCRIPT_DIR/hooks/lib/common.sh; printf '%s' '中文中文' | _cap_chars 2")
+[[ "$R" == "中文..." ]] && report PASS "CJK truncation works under LC_ALL=C" || report FAIL "LC=C got '$R'"
+
+echo ""
 echo "=== extract_user_messages exclude ==="
 
 # Three user messages; exclude the first → tail returns only the other two
