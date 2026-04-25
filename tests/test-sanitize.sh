@@ -18,6 +18,24 @@ report() {
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "$SCRIPT_DIR/hooks/lib/common.sh"
 
+# Locale-independent UTF-8 char counter (mirrors _cap_chars's byte-mode logic).
+# `wc -m` is locale-aware and reports BYTES under LC_ALL=C, breaking CJK
+# assertions when the test runner doesn't have a UTF-8 locale exported.
+_test_count_chars() {
+  LC_ALL=C awk '
+    BEGIN { for (i = 0; i < 256; i++) ord[sprintf("%c", i)] = i }
+    { buf = (NR > 1 ? buf "\n" : "") $0 }
+    END {
+      L = length(buf); n = 0
+      for (i = 1; i <= L; i++) {
+        v = ord[substr(buf, i, 1)]
+        if (v < 0x80 || v >= 0xC0) n++
+      }
+      print n
+    }
+  '
+}
+
 echo "=== sanitize_ai_text ==="
 
 # Case 1: Fenced code block stripped
@@ -105,7 +123,7 @@ fi
 # Case 11: 300-char cap with CJK input (validates char-based, not byte-based, slicing)
 IN=$(python3 -c "print('中文' * 200)")  # 400 CJK chars = 1200 bytes
 R=$(sanitize_ai_text "$IN")
-CHAR_LEN=$(printf '%s' "$R" | wc -m | tr -d ' ')
+CHAR_LEN=$(printf '%s' "$R" | _test_count_chars)
 if [[ "$CHAR_LEN" -eq 303 && "${R: -3}" == "..." ]]; then
   report PASS "CJK input capped to 300 chars + ..."
 else
