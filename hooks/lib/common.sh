@@ -330,13 +330,21 @@ sanitize_ai_text() {
 format_dialog() {
   local goal="$1" user_msgs="$2" state="$3"
   local parts=()
-  [[ -n "$goal" ]] && parts+=("GOAL: $goal")
+  if [[ -n "$goal" ]]; then
+    local flat_goal
+    flat_goal=$(printf '%s' "$goal" | _flatten_oneline)
+    [[ -n "$flat_goal" ]] && parts+=("GOAL: $flat_goal")
+  fi
   if [[ -n "$user_msgs" ]]; then
     local user_block
     user_block=$(printf '%s' "$user_msgs" | awk 'NF { print "USER: " $0 }')
     [[ -n "$user_block" ]] && parts+=("$user_block")
   fi
-  [[ -n "$state" ]] && parts+=("STATE: $state")
+  if [[ -n "$state" ]]; then
+    local flat_state
+    flat_state=$(printf '%s' "$state" | _flatten_oneline)
+    [[ -n "$flat_state" ]] && parts+=("STATE: $flat_state")
+  fi
   local IFS=$'\n'
   printf '%s' "${parts[*]}"
 }

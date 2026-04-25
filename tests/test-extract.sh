@@ -212,6 +212,20 @@ EXPECTED=$'GOAL: g\nUSER: user one\nUSER: user two\nSTATE: s'
 R=$(format_dialog "" "" "")
 [[ -z "$R" ]] && report PASS "all-empty → empty" || report FAIL "all-empty got: $R"
 
+# Multi-line GOAL flattened to one labeled line
+R=$(format_dialog $'goal line one\ngoal line two' "user one" "state content")
+EXPECTED=$'GOAL: goal line one goal line two\nUSER: user one\nSTATE: state content'
+[[ "$R" == "$EXPECTED" ]] && report PASS "multi-line GOAL flattened" || report FAIL "multi-goal got: $R"
+
+# Multi-line STATE flattened to one labeled line
+R=$(format_dialog "g" "user one" $'state line one\nstate line two')
+EXPECTED=$'GOAL: g\nUSER: user one\nSTATE: state line one state line two'
+[[ "$R" == "$EXPECTED" ]] && report PASS "multi-line STATE flattened" || report FAIL "multi-state got: $R"
+
+# GOAL with embedded tabs and CR collapsed to single spaces
+R=$(format_dialog $'tabbed\tgoal\rwith CR' "" "")
+[[ "$R" == "GOAL: tabbed goal with CR" ]] && report PASS "tab/CR in GOAL flattened" || report FAIL "tab/CR got: $R"
+
 echo ""
 echo "================================"
 echo "Results: $PASS passed, $FAIL failed"
