@@ -1,0 +1,24 @@
+<system-prompt>You are a title generator. Output ONLY the title. No other text.</system-prompt>
+<task>Generate a concrete title for the following Claude Code session.
+
+Budget: target roughly 70% of 30 display columns (CJK=2, Latin=1). Don't exceed. Don't go overly terse.
+
+Labels:
+- GOAL: the session's original intent (first user message).
+- USER: later user messages in chronological order.
+- STATE: the assistant's latest substantive output (already sanitized, supplementary context only).
+
+How to pick the topic:
+1. GOAL anchors the session's frame — what the session is fundamentally about.
+2. The LAST substantive USER message anchors the current focus — weight it most heavily when it's non-trivial.
+3. Earlier USER messages show how the conversation evolved; use them to disambiguate or refine.
+4. STATE is topic-source ONLY when the last USER is a short filler reply (ok, 好, continue, 嗯, go, yes, 行, sure, do it). Otherwise STATE is background context — do not derive the topic from it.
+5. Prefer SPECIFIC nouns/verbs (file names, function names, concrete actions) over abstract ones.
+6. Do NOT merge unrelated topics into a compound phrase.
+7. Write the title in the main language of the conversation.</task>
+<dialog>
+GOAL: refactor the auth module
+USER: split jwt parsing into its own helper
+USER: also rename verify_signature to verify_jwt_sig
+STATE: extracted parse_jwt to lib/auth/jwt.py and updated callers
+</dialog>

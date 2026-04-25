@@ -460,6 +460,15 @@ How to pick the topic:
 
   log "Generating title: model=$MODEL language=$LANGUAGE"
 
+  # Snapshot dry-run: print the rendered prompt + dialog to stdout and skip
+  # the model call. Lets tests guard against accidental prompt drift via a
+  # plain text diff against tests/snapshots/prompt.txt.
+  if [[ -n "${CLAUDE_LIVE_TITLE_PRINT_DIALOG-}" ]]; then
+    printf '<system-prompt>%s</system-prompt>\n<task>%s</task>\n<dialog>\n%s\n</dialog>' \
+      "$system_prompt" "$task_prompt" "$user_msgs"
+    return 0
+  fi
+
   local title_raw
   # CLAUDE_LIVE_TITLE_INTERNAL=1 is inherited by the hooks `claude -p` spawns,
   # letting them detect and skip the subsession to avoid recursion + wasted calls.
