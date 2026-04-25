@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-04-25
+
+### Added
+- `bin/promote-fixture.sh` and a structured replay log entry: when `DEBUG=true`, every generated title now appends one JSON event to `/tmp/claude-live-title-debug.log` capturing `{ts, session_id, dialog, title}`. The promote helper pulls the most recent (or `--grep`'d) event and writes a minimal transcript `.jsonl` plus a stub `.expected.yaml` under `tests/fixtures/transcripts/`, so a user who notices a bad title can turn it into a regression fixture in one command.
+- `tests/test-fixtures.sh` — fixture replay harness. Lints fixtures by default (dialog non-empty, `must_not_contain` strings absent from the dialog Haiku sees); with `RUN_LIVE=1` also calls the real model and checks the resulting title against `must_contain_any` / `must_not_contain`.
+- `hooks/lib/sanitize-line-rules.tsv` — data-driven catalog for the line-level drop rules in `sanitize_ai_text` step 3. Adding a noise pattern (Rust panic, Go panic, Ruby backtrace, Java inner-class frame, Node `UnhandledPromiseRejection`) is now one TSV row. Stateful logic (fence toggle, blank collapse, substance gate, length cap) deliberately stays in code per the design plan's D3 boundary.
+- `CLAUDE_LIVE_TITLE_PRINT_DIALOG=1` dry-run mode in `generate_title`: prints the rendered system + task prompt + dialog to stdout and skips the model call. Backs `tests/test-prompt-snapshot.sh`, which diffs against `tests/snapshots/prompt.txt` so prompt drift becomes a visible review diff.
+- `tests/test-clean-title.sh`, `tests/test-entry.sh`, `tests/test-promote-fixture.sh` — three new test suites covering title post-processing (28 cases including combined-wrapping shapes), end-to-end hook wiring with stubbed `claude` (9 scenarios spanning fresh-session GOAL fallback, throttle, lock contention, marker dedup), and the promote helper (8 cases).
+
+### Changed
+- `clean_title` rewritten as a fixed-point loop using `sed -E`: combined-wrapping shapes like `"Title: Fix."` and `标题：「修复」。` now peel fully, and multiple trailing punctuation (`修登录。！`) collapses in one shot. No new behaviour for normal one-layer titles.
+
 ## [1.2.1] - 2026-04-25
 
 ### Fixed
