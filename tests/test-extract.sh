@@ -181,6 +181,67 @@ R=$(extract_user_messages "$T" "")
 [[ "$R" == *"first goal message"* ]] && report PASS "no exclude → first still in sample" || report FAIL "no-exclude got '$R'"
 rm -f "$T"
 
+# Multi-line user entry → flattened to one line so format_dialog labels it once
+T=$(make_transcript '{"type":"user","message":{"content":"first goal"}}
+{"type":"user","message":{"content":"multi\nline\nuser"}}
+')
+R=$(extract_user_messages "$T" "")
+N=$(printf '%s\n' "$R" | wc -l | tr -d ' ')
+if [[ "$N" -eq 2 && "$R" == *"first goal"* && "$R" == *"multi line user"* ]]; then
+  report PASS "multi-line user entry flattened to one line"
+else
+  report FAIL "multi-line user got (lines=$N): '$R'"
+fi
+rm -f "$T"
+
+# Multi-line GOAL passed as exclude is flattened before grep -vxF
+T=$(make_transcript '{"type":"user","message":{"content":"goal\nspans two"}}
+{"type":"user","message":{"content":"another"}}
+')
+R=$(extract_user_messages "$T" "" $'goal\nspans two')
+if [[ "$R" != *"goal spans two"* && "$R" == *"another"* ]]; then
+  report PASS "multi-line exclude flattened before dedup"
+else
+  report FAIL "multi-line exclude got '$R'"
+fi
+rm -f "$T"
+
+# After Task 1.1 GOAL is single-line. A multi-line user entry whose flattened form
+# equals that single-line GOAL must be excluded — the real end-to-end dedup case.
+T=$(make_transcript '{"type":"user","message":{"content":"goal\nspans two"}}
+{"type":"user","message":{"content":"another"}}
+')
+R=$(extract_user_messages "$T" "" "goal spans two")
+N=$(printf '%s\n' "$R" | wc -l | tr -d ' ')
+if [[ "$N" -eq 1 && "$R" == "another" ]]; then
+  report PASS "single-line exclude vs multi-line user entry"
+else
+  report FAIL "flat-exclude got (lines=$N): '$R'"
+fi
+rm -f "$T"
+
+# system-reminder block within a user entry stripped (block-mode)
+T=$(make_transcript '{"type":"user","message":{"content":"<system-reminder>\nhook ran with X\nmore reminder text\n</system-reminder>\n实际内容"}}
+')
+R=$(extract_user_messages "$T" "")
+if [[ "$R" == "实际内容" && "$R" != *"hook ran"* ]]; then
+  report PASS "system-reminder block stripped from user entry"
+else
+  report FAIL "user-reminder got '$R'"
+fi
+rm -f "$T"
+
+# local-command-stdout block stripped (block-mode)
+T=$(make_transcript '{"type":"user","message":{"content":"<local-command-stdout>\nlots of output\nmore output\n</local-command-stdout>\n实际问题"}}
+')
+R=$(extract_user_messages "$T" "")
+if [[ "$R" == "实际问题" && "$R" != *"output"* ]]; then
+  report PASS "local-command-stdout block stripped from user entry"
+else
+  report FAIL "stdout-block got '$R'"
+fi
+rm -f "$T"
+
 echo ""
 echo "=== format_dialog (goal, users, state) ==="
 

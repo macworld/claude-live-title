@@ -190,30 +190,47 @@ extract_user_messages() {
     last_lines=$(echo "$all_user_lines" | tail -"$TAIL_MESSAGES")
     selected=$(printf '%s\n%s' "$first_lines" "$last_lines" | awk '!seen[$0]++')
 
-    msgs=$(echo "$selected" | jq -r '
-      if (.message.content | type) == "string" then
-        .message.content
-      elif (.message.content | type) == "array" then
-        [.message.content[] | select(.type == "text") | .text] | join(" ")
-      else
-        empty
-      end
-    ' 2>/dev/null \
-      | sed '/<system-reminder>/d; /<\/system-reminder>/d' \
-      | grep -v '^<command-' | grep -v '^<local-command' \
-      | sed '/^[[:space:]]*$/d')
+    # Process each entry independently: strip <system-reminder> /
+    # <local-command-stdout|stderr> blocks (which the harness embeds into
+    # user content as multi-line regions), then flatten to a single line so
+    # one logical user message becomes exactly one USER: line in the dialog.
+    local entry flat
+    while IFS= read -r entry; do
+      [[ -z "$entry" ]] && continue
+      flat=$(printf '%s' "$entry" | jq -r '
+        if (.message.content | type) == "string" then
+          .message.content
+        elif (.message.content | type) == "array" then
+          ([.message.content[] | select(.type == "text") | .text] | join(" "))
+        else
+          empty
+        end
+      ' 2>/dev/null \
+        | sed -E '
+            /<system-reminder>/,/<\/system-reminder>/d
+            /<local-command-stdout>/,/<\/local-command-stdout>/d
+            /<local-command-stderr>/,/<\/local-command-stderr>/d
+          ' \
+        | grep -Ev '^<\/?(local-)?command-' \
+        | _flatten_oneline)
+      [[ -n "$flat" ]] && msgs=${msgs:+$msgs$'\n'}$flat
+    done <<< "$selected"
   fi
 
   if [[ -n "$current_prompt" ]]; then
-    if [[ -n "$msgs" ]]; then
-      msgs=$(printf '%s\n%s' "$msgs" "$current_prompt")
-    else
-      msgs="$current_prompt"
+    local flat_prompt
+    flat_prompt=$(printf '%s' "$current_prompt" | _flatten_oneline)
+    if [[ -n "$flat_prompt" ]]; then
+      msgs=${msgs:+$msgs$'\n'}$flat_prompt
     fi
   fi
 
   if [[ -n "$exclude" ]]; then
-    msgs=$(printf '%s' "$msgs" | grep -vxF -- "$exclude" || true)
+    local flat_exclude
+    flat_exclude=$(printf '%s' "$exclude" | _flatten_oneline)
+    if [[ -n "$flat_exclude" ]]; then
+      msgs=$(printf '%s' "$msgs" | grep -vxF -- "$flat_exclude" || true)
+    fi
   fi
 
   msgs=$(printf '%s' "$msgs" | head -c "$MAX_INPUT_CHARS")
