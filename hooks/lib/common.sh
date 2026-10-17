@@ -179,12 +179,13 @@ load_config() {
 # load_project_style <cwd>
 # A project can keep its naming rules in .claude/live-title.md (looked up
 # from CLAUDE_PROJECT_DIR, else the hook's cwd), so a team shares them
-# through the repo. A non-blank file replaces the configured style.
+# through the repo. A non-blank file replaces the configured style. Symlinks
+# are refused: a cloned repo could point them at a private file elsewhere.
 load_project_style() {
   local dir="${CLAUDE_PROJECT_DIR:-${1-}}" file text
   [[ -n "$dir" ]] || return 0
   file="$dir/.claude/live-title.md"
-  [[ -f "$file" && -r "$file" ]] || return 0
+  [[ -f "$file" && -r "$file" && ! -L "$file" && ! -L "$dir/.claude" ]] || return 0
   text=$(tr -d '\r' < "$file" | tr '\t' ' ' | LC_ALL=C tr -d '\000-\011\013-\037\177' \
     | _cap_chars "$STYLE_MAX_CHARS" '')
   text=$(_trim_text "$text")
@@ -828,16 +829,18 @@ _run_with_timeout() {
 }
 
 # _title_model_call <lean|basic> <prompt_file>
-# Prints the CLI's JSON output. "lean" strips tools, other plugins' hooks,
+# Prints the CLI's JSON output. "lean" also strips other plugins' hooks,
 # CLAUDE.md and MCP (~700 input tokens instead of ~25K) and asks for low
-# effort; "basic" is the 1.3 flag set for Claude Code versions that reject
-# the newer flags.
+# effort; "basic" is for Claude Code versions that reject those flags. Both
+# run without tools: the prompt carries transcript text and the project's
+# .claude/live-title.md, which must never get to run anything. A CLI that
+# rejects --tools gets no title.
 _title_model_call() {
   local mode="$1" prompt_file="$2"
   local -a args=(-p --no-session-persistence --model "$MODEL"
-    --system-prompt "$TITLE_SYSTEM_PROMPT" --output-format json)
+    --system-prompt "$TITLE_SYSTEM_PROMPT" --output-format json --tools "")
   if [[ "$mode" == "lean" ]]; then
-    args+=(--tools "" --effort low --safe-mode)
+    args+=(--effort low --safe-mode)
   fi
   # CLAUDE_LIVE_TITLE_INTERNAL=1 is inherited by any hook the helper session
   # runs, letting our own hooks skip it (basic mode still loads plugins).

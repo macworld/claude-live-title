@@ -42,6 +42,7 @@ export STUB_LOG
 #   unflagged     usage-limit text but is_error=false (defensive path)
 #   error         is_error with a generic API error
 #   no-lean       rejects --safe-mode like an older CLI (exit 5)
+#   no-tools      rejects --tools as well, like a much older CLI (exit 5)
 # A shorten request (prompt holds <title>) is answered with $STUB_SHORT, or
 # with $STUB_SHORT2 when it is the second shorten request in a row.
 cat > "$FIX/bin/claude" <<'STUB'
@@ -53,9 +54,10 @@ if [[ "$input" == *"<title>"* && -n "${STUB_SHORT-}" ]]; then
 fi
 { printf 'CALL'; printf ' [%s]' "$@"; printf '\n'; printf '%s\n' "$input"; echo "END"; } >> "$STUB_LOG"
 mode="${STUB_MODE:-ok}"
-if [[ "$mode" == "no-lean" ]]; then
+if [[ "$mode" == "no-lean" || "$mode" == "no-tools" ]]; then
   for a in "$@"; do
     [[ "$a" == "--safe-mode" ]] && { echo "error: unknown option '--safe-mode'" >&2; exit 5; }
+    [[ "$a" == "--tools" && "$mode" == "no-tools" ]] && { echo "error: unknown option '--tools'" >&2; exit 5; }
   done
   mode=ok
 fi
@@ -338,6 +340,19 @@ age_state 0
 human "write more docs" p2
 STUB_MODE=no-lean STUB_TITLE="Write more docs" run_live "write more docs" p2
 check "next call goes straight to basic" "1" "$(calls)"
+# The prompt carries text from the transcript and the project's
+# .claude/live-title.md, so no fallback may hand the model its tools.
+grep '^CALL' "$STUB_LOG" | grep -qv '\[--tools\] \[\]' \
+  && report FAIL "basic fallback ran with tools: $(grep '^CALL' "$STUB_LOG" | head -1)" \
+  || report PASS "basic fallback still runs with --tools \"\""
+
+new_session notools
+human "write docs" p1
+STUB_MODE=no-tools STUB_TITLE="Write docs" run_live "write docs" p1
+check "CLI without --tools: nothing written" "0" "$(title_count)"
+grep '^CALL' "$STUB_LOG" | grep -qv '\[--tools\] \[\]' \
+  && report FAIL "model called without --tools \"\"" \
+  || report PASS "CLI without --tools: never called with tools enabled"
 
 new_session pinned
 human "fix login" p1

@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [2.1.1] - 2026-10-17
+
+### Security
+- The title model never gets tools. The fallback for Claude Code versions that reject `--safe-mode` or `--effort` also dropped `--tools ""`, so on those versions a prompt carrying transcript text or a project's `.claude/live-title.md` ran with Claude Code's default tools, limited only by your permission settings. The fallback now keeps `--tools ""`, and a CLI that rejects it gets no title.
+- A symlinked `.claude/live-title.md` (or `.claude` directory) is ignored, so a cloned repo can't point it at a private file elsewhere.
+
 ## [2.1.0] - 2026-10-17
 
 ### Added

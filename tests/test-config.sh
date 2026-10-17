@@ -113,6 +113,11 @@ check_style "blank project file → configured style" "Global rule" "$PROJ"
 rm -f "$CONFIG"
 printf 'y%.0s' $(seq 1 1500) > "$PROJ/.claude/live-title.md"
 check_style "project file capped at 1000 characters" "$(printf 'y%.0s' $(seq 1 1000))" "$PROJ"
+# A cloned repo could point the file at something private outside it.
+echo 'secret outside the project' > "$TMP/private.txt"
+rm -f "$PROJ/.claude/live-title.md"
+ln -s "$TMP/private.txt" "$PROJ/.claude/live-title.md"
+check_style "symlinked project file ignored" "" "$PROJ"
 rm -rf "$PROJ"
 
 echo ""
