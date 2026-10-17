@@ -8,7 +8,7 @@ Claude Code plugin: auto-generate meaningful session titles in real-time. The pl
 - Shared logic lives in hooks/lib/common.sh, entry scripts stay thin
 - Zero runtime dependencies: only bash + jq + `claude -p`
 - Hooks must never block the user: anything that calls the model runs with `async: true`. The one sync hook (`apply-title.sh`) makes no model call, finishes in milliseconds, prints only its JSON reply and always exits 0
-- State, debug log and cooldown markers live in `${CLAUDE_PLUGIN_DATA}`, never in `/tmp`
+- State, debug log, cooldown markers and the prompt temp file live in `${CLAUDE_PLUGIN_DATA}`, never in `/tmp`
 - Config location: ${CLAUDE_PLUGIN_DATA}/config.json (the old ~/.claude/plugins/claude-live-title/config.json is migrated on first load)
 
 ## Testing

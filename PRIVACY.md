@@ -25,7 +25,7 @@ All files live in the plugin's data directory (`~/.claude/plugins/data/live-titl
 - `cooldown-until`, `lean-flags-unsupported` — timestamps that pause title generation after errors.
 - `debug.log` — only when `debug` is turned on. It contains excerpts of your conversations, is readable only by your user account, and is rotated at 1 MB.
 
-The prompt for each title is written to a temporary file (mode 600) and deleted right after the call.
+The prompt for each title is written to a temporary file in the same directory (mode 600) and deleted right after the call.
 
 ## Contact
 

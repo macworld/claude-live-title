@@ -897,8 +897,10 @@ _parse_model_output() {
 # Sets MODEL_STATUS/MODEL_TEXT; returns 0 when the model answered. Failures
 # start a cooldown so a usage limit is not hit again and again.
 _ask_model() {
+  # The prompt holds conversation text, so it stays in the private data dir.
   local prompt_file
-  prompt_file=$(mktemp "${TMPDIR:-/tmp}/live-title-prompt.XXXXXX") || return 1
+  mkdir -p "$DATA_DIR" 2>/dev/null
+  prompt_file=$(mktemp "$DATA_DIR/prompt.XXXXXX") || return 1
   printf '%s' "$1" > "$prompt_file"
   local -a modes=(lean basic)
   if [[ -f "$LEAN_UNSUPPORTED_FILE" ]] \

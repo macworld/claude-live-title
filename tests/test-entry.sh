@@ -45,6 +45,8 @@ export STUB_LOG
 #   no-tools      rejects --tools as well, like a much older CLI (exit 5)
 # A shorten request (prompt holds <title>) is answered with $STUB_SHORT, or
 # with $STUB_SHORT2 when it is the second shorten request in a row.
+# $STUB_LS_DIRS: directories whose contents are listed into the log at call
+# time, to see which files exist while the model runs.
 cat > "$FIX/bin/claude" <<'STUB'
 #!/usr/bin/env bash
 input=$(cat)
@@ -53,6 +55,7 @@ if [[ "$input" == *"<title>"* && -n "${STUB_SHORT-}" ]]; then
   [[ "$input" == *"<title>${STUB_SHORT}</title>"* && -n "${STUB_SHORT2-}" ]] && STUB_TITLE="$STUB_SHORT2"
 fi
 { printf 'CALL'; printf ' [%s]' "$@"; printf '\n'; printf '%s\n' "$input"; echo "END"; } >> "$STUB_LOG"
+for d in ${STUB_LS_DIRS-}; do printf 'LS %s: %s\n' "$d" "$(ls -A "$d" 2>/dev/null | tr '\n' ' ')" >> "$STUB_LOG"; done
 mode="${STUB_MODE:-ok}"
 if [[ "$mode" == "no-lean" || "$mode" == "no-tools" ]]; then
   for a in "$@"; do
@@ -361,6 +364,16 @@ check "CLI without --tools: nothing written" "0" "$(title_count)"
 grep '^CALL' "$STUB_LOG" | grep -qv '\[--tools\] \[\]' \
   && report FAIL "model called without --tools \"\"" \
   || report PASS "CLI without --tools: never called with tools enabled"
+
+new_session promptfile
+human "fix the parser" p1
+mkdir -p "$FIX/tmp"
+# The prompt holds conversation text, so it belongs in the plugin's private
+# data directory, not wherever TMPDIR points.
+STUB_LS_DIRS="$FIX/tmp $CLAUDE_PLUGIN_DATA" TMPDIR="$FIX/tmp" STUB_TITLE="Fix parser" run_live "fix the parser" p1
+grep -q "^LS $CLAUDE_PLUGIN_DATA:.*prompt" "$STUB_LOG" && ! grep -q "^LS $FIX/tmp:.*prompt" "$STUB_LOG" \
+  && report PASS "prompt file is created in the data dir, not in TMPDIR" || report FAIL "prompt file location: $(grep '^LS' "$STUB_LOG" | tr '\n' ' ')"
+[[ -z "$(ls -A "$CLAUDE_PLUGIN_DATA" | grep prompt)" ]] && report PASS "prompt file removed after the call" || report FAIL "prompt file left behind"
 
 new_session pinned
 human "fix login" p1
