@@ -2,6 +2,7 @@
 
 Meaningful Claude Code session titles, updated live as the conversation evolves. Formerly `claude-live-title`.
 
+[![Release](https://img.shields.io/github/v/release/macworld/claude-live-title)](https://github.com/macworld/claude-live-title/releases)
 [![License](https://img.shields.io/github/license/macworld/claude-live-title)](LICENSE)
 [![Stars](https://img.shields.io/github/stars/macworld/claude-live-title)](https://github.com/macworld/claude-live-title/stargazers)
 
