@@ -108,9 +108,11 @@ run_live() {
      + (if $cwd != "" then {cwd:$cwd} else {} end)' \
     | bash "$SCRIPT_DIR/hooks/live-title.sh" || true
 }
+# run_stop [last_assistant_message]; $HOOK_CWD becomes the input's cwd
 run_stop() {
-  jq -nc --arg sid "$SID" --arg tx "$TX" --arg cwd "${HOOK_CWD-}" \
-    '{session_id:$sid, transcript_path:$tx} + (if $cwd != "" then {cwd:$cwd} else {} end)' \
+  jq -nc --arg sid "$SID" --arg tx "$TX" --arg cwd "${HOOK_CWD-}" --arg last "${1-}" \
+    '{session_id:$sid, transcript_path:$tx} + (if $cwd != "" then {cwd:$cwd} else {} end)
+     + (if $last != "" then {last_assistant_message:$last} else {} end)' \
     | bash "$SCRIPT_DIR/hooks/stop-title.sh" || true
 }
 # run_apply <session_title> [prompt] → prints the hook's stdout
@@ -471,6 +473,27 @@ human "refactor utils module"
 reply "extracted format_date to date_utils.py"
 STUB_TITLE="Refactor utils" run_stop
 check "no title yet: Stop writes one" "Refactor utils" "$(last_title)"
+
+# Claude Code hands Stop the final reply as last_assistant_message; the
+# transcript isn't guaranteed to hold it yet.
+new_session lastmsg
+human "migrate the settings page to the new form library"
+reply "Started on the settings form; the transcript may still end with this earlier text."
+STUB_TITLE="Migrate settings form" run_stop "Finished: the settings page now uses the new form library and every field validates."
+grep -q '^CLAUDE: Finished: the settings page now uses the new form library' "$STUB_LOG" \
+  && report PASS "Stop takes the Claude excerpt from last_assistant_message" || report FAIL "Stop read the excerpt from the transcript: $(grep '^CLAUDE:' "$STUB_LOG")"
+new_session lastmsg-error
+human "migrate the settings page to the new form library"
+reply "Started on the settings form, wiring up the validation rules for every field."
+STUB_TITLE="Migrate settings form" run_stop "API Error: 500 Internal server error, please retry the request in a moment"
+grep -q '^CLAUDE: Started on the settings form' "$STUB_LOG" \
+  && report PASS "error text as last_assistant_message: transcript used instead" || report FAIL "error text reached the model: $(grep '^CLAUDE:' "$STUB_LOG")"
+new_session lastmsg-absent
+human "migrate the settings page to the new form library"
+reply "Started on the settings form, wiring up the validation rules for every field."
+STUB_TITLE="Migrate settings form" run_stop
+grep -q '^CLAUDE: Started on the settings form' "$STUB_LOG" \
+  && report PASS "no last_assistant_message (older Claude Code): transcript used" || report FAIL "no Claude excerpt: $(grep '^CLAUDE:' "$STUB_LOG")"
 
 new_session revert
 human "task a" p1

@@ -1115,16 +1115,24 @@ write_title() {
 }
 
 # ── Generate + Deliver ──
-# title_update <transcript> <session_id> <humans_json> <trigger>
-# Caller holds the session lock and has run state_load.
+# title_update <transcript> <session_id> <humans_json> <trigger> [last_reply]
+# Caller holds the session lock and has run state_load. last_reply is the
+# text of Claude's latest reply when the hook input carries it (Stop's
+# last_assistant_message); without it the transcript is read, which isn't
+# guaranteed to hold the final message yet.
 title_update() {
-  local transcript="$1" session_id="$2" humans="$3" trigger="$4"
+  local transcript="$1" session_id="$2" humans="$3" trigger="$4" last_reply="${5-}"
   local human_count
   human_count=$(printf '%s' "$humans" | jq 'length' 2>/dev/null || echo 0)
   [[ "$human_count" =~ ^[0-9]+$ ]] || human_count=0
 
   local ai_text dialog
-  ai_text=$(sanitize_ai_text "$(extract_last_ai_text "$transcript")")
+  # Claude Code's own error text is no reply; the transcript reader skips
+  # the synthetic messages that carry it.
+  if [[ -z "$last_reply" ]] || printf '%s' "$last_reply" | grep -Eq "$_CC_ERROR_RE"; then
+    last_reply=$(extract_last_ai_text "$transcript")
+  fi
+  ai_text=$(sanitize_ai_text "$last_reply")
   dialog=$(build_dialog "$ST_LATEST" "$humans" "$ai_text")
   [[ -z "$dialog" ]] && { log "Empty dialog, skipping"; return 0; }
 

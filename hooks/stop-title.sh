@@ -5,8 +5,9 @@
 #   2. Generates a title when the session has none yet (and a message came
 #      in since the model last found no task in it), when user messages
 #      arrived that the live hook skipped (throttle; bare "ok"/"继续" don't
-#      count), or every REFRESH_INTERVAL of activity so long autonomous runs
-#      stay current.
+#      count), or when the last check is REFRESH_INTERVAL old, so long
+#      autonomous runs stay current. The reply the model sees is the one
+#      Claude Code hands this hook; the transcript may not hold it yet.
 set -eu
 
 # Skip when invoked by our own `claude -p` subsession — otherwise the
@@ -22,6 +23,7 @@ INPUT=$(cat)
 exec >/dev/null
 IFS=$'\x1f' read -r SESSION_ID TRANSCRIPT_PATH CWD <<< "$(printf '%s' "$INPUT" | jq -r \
   '[(.session_id // ""), (.transcript_path // ""), (.cwd // "")] | join("\u001f")')"
+LAST_REPLY=$(printf '%s' "$INPUT" | jq -r '.last_assistant_message // empty' 2>/dev/null) || LAST_REPLY=""
 
 [[ -z "$SESSION_ID" || -z "$TRANSCRIPT_PATH" || ! -f "$TRANSCRIPT_PATH" ]] && exit 0
 
@@ -77,4 +79,4 @@ fi
 cooldown_active && { log "Cooldown active, skipping $TRIGGER"; exit 0; }
 
 log "Stop generating ($TRIGGER): humans=$HUMAN_COUNT last=$ST_LAST_HUMAN age=$(( NOW - ST_LAST_GEN ))s"
-title_update "$TRANSCRIPT_PATH" "$SESSION_ID" "$HUMANS" "$TRIGGER"
+title_update "$TRANSCRIPT_PATH" "$SESSION_ID" "$HUMANS" "$TRIGGER" "$LAST_REPLY"
