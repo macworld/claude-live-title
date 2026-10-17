@@ -7,11 +7,17 @@ Meaningful Claude Code session titles, updated live as the conversation evolves.
 
 English | [中文](README_ZH.md)
 
+![Demo: Live Title names a Claude Code session from the first message, renames it when the task changes, and keeps sessions easy to tell apart across tabs and in /resume](assets/demo-en.gif)
+
 ## Why?
 
-Claude Code names sessions with random slugs like `elegant-chasing-eich`. A title based on the first message helps, but sessions move on: you start with a login bug and end up refactoring the auth middleware.
+Claude Code names sessions with random slugs like `elegant-chasing-eich`. A title based on the first message helps, but sessions move on: you start with a login bug and end up refactoring the auth middleware. Live Title keeps every session named after what it's doing now.
 
-Live Title keeps the title on what the session is doing now. If you run several sessions side by side in tmux or split terminals, one glance at the statusline tells you which is which and where you left off. Pair it with [Claude HUD](#using-with-claude-hud) to show the title in the statusline.
+- **Named from your first message.** Describe a bug and the session is called "Fix 401 despite valid refresh", not a random slug.
+- **Follows the task.** When the work moves on to rotating refresh tokens, the title moves with it. A reply like "sounds good, go ahead" leaves it alone.
+- **Easy to find again.** With several sessions open in tabs, tmux or split terminals, one glance at the statusline tells you which is which and where you left off. In `/resume`, past sessions are listed by what they did.
+
+The titles in the demo are what the plugin generated for those messages. The statusline is [Claude HUD](#using-with-claude-hud) with `showSessionName` turned on.
 
 ## Features
 
