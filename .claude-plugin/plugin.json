@@ -1,7 +1,7 @@
 {
   "name": "live-title",
   "description": "Session titles that follow what you're working on now, not just your first message. Multilingual, with an optional naming format.",
-  "version": "2.1.2",
+  "version": "2.1.3",
   "author": {
     "name": "macworld",
     "email": "lwh.scu@gmail.com",

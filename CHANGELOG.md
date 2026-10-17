@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [2.1.3] - 2026-10-17
+
+### Fixed
+- The Stop hook takes Claude's latest reply from the hook input (`last_assistant_message`) instead of the transcript, which Claude Code doesn't guarantee to hold the final message at Stop time. The transcript is still read when the input carries no reply or Claude Code's own error text.
+- One hook run spends at most 60 s on model calls in all (the title plus up to two shortening calls), well inside the 90 s after which another hook treats the session lock as stale, so a hung call can no longer let two generations run at once. A call that times out is no longer retried with the basic flag set.
+- The prompt is written to a temporary file in the plugin's data directory instead of `/tmp`.
+
+### Changed
+- Config keys the plugin doesn't know are named in the debug log instead of being ignored silently.
+- `hooks/hooks.json` no longer sets `matcher`, which Claude Code ignores on UserPromptSubmit and Stop, or a `timeout` on the async hooks, which it doesn't enforce.
+- README: a shorter feature list, the hook and prompt internals folded into a details block, a configuration table with the four settings most people use and the rest folded away, and the note about the tab updating one message late made once instead of three times. The plugin description is the same sentence in `plugin.json` and `marketplace.json`.
+- Windows support is stated as WSL only; Git Bash was never tested.
+
 ## [2.1.2] - 2026-10-17
 
 ### Fixed
