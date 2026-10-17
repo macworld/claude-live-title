@@ -156,6 +156,24 @@ LEFTOVER=$(ls -A "$NEW" "$NEW/sessions" | grep -c '\.tmp$' || true)
 check_eq "no temp files left behind" "0" "$LEFTOVER"
 
 echo ""
+echo "=== unknown keys ==="
+# A typo in a key would otherwise be a silent no-op.
+LOG="$TMP/debug.log"
+rm -f "$LOG"
+echo '{"debug":true,"maxlength":40,"throttleMessages":2}' > "$CONFIG"
+CLAUDE_LIVE_TITLE_DEBUG_LOG="$LOG" resolved >/dev/null
+if grep -q 'unknown' "$LOG" 2>/dev/null && grep -q 'maxlength' "$LOG" && grep -q 'throttleMessages' "$LOG"; then
+  report PASS "unknown keys are named in the debug log"
+else
+  report FAIL "unknown keys not logged: $(cat "$LOG" 2>/dev/null | tr '\n' ' ')"
+fi
+rm -f "$LOG"
+echo '{"debug":true,"language":"en","contextMessages":{"head":2},"style":"x"}' > "$CONFIG"
+CLAUDE_LIVE_TITLE_DEBUG_LOG="$LOG" resolved >/dev/null
+grep -q 'unknown' "$LOG" 2>/dev/null && report FAIL "known keys reported as unknown: $(grep unknown "$LOG")" || report PASS "known keys only: nothing reported"
+rm -f "$LOG" "$CONFIG"
+
+echo ""
 echo "================================"
 echo "Results: $PASS passed, $FAIL failed"
 [[ "$FAIL" -eq 0 ]] && echo "All tests passed!" || exit 1

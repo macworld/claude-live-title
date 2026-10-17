@@ -145,14 +145,19 @@ load_config() {
   if [[ -f "$config_file" ]]; then
     # One jq pass. `opt` treats only a missing/null key as unset, so an
     # explicit `false` survives (jq's `//` would replace it with the default).
-    # style comes last, its newlines carried as \x1e so the line stays one.
-    local parsed
+    # Keys the plugin doesn't know (a typo, a retired setting) are reported,
+    # not silently ignored. style comes last, its newlines carried as \x1e so
+    # the line stays one.
+    local parsed unknown
     parsed=$(jq -r --argjson max "$STYLE_MAX_CHARS" '
       def opt($k; $d): if type == "object" and has($k) and .[$k] != null then .[$k] else $d end;
       (.contextMessages | if type == "object" then . else {} end) as $ctx
+      | ((if type == "object" then keys else [] end)
+         - ["model", "language", "maxLength", "contextMessages", "throttleInterval", "liveUpdate", "debug", "style"]
+         | map(gsub("[\\x00-\\x1f\\x7f]"; "")) | join(", ")) as $unknown
       | [ opt("model"; "haiku"), opt("language"; "auto"), opt("maxLength"; 30),
           ($ctx | opt("head"; 1)), ($ctx | opt("tail"; 5)),
-          opt("throttleInterval"; 60), opt("liveUpdate"; true), opt("debug"; false) ]
+          opt("throttleInterval"; 60), opt("liveUpdate"; true), opt("debug"; false), $unknown ]
         + [ opt("style"; "") | if type == "string" then . else "" end
             | gsub("\r"; "") | gsub("\t"; " ") | gsub("[\\x00-\\x09\\x0b-\\x1f\\x7f]"; "")
             | .[0:$max] | gsub("\n"; "\u001e") ]
@@ -160,7 +165,7 @@ load_config() {
     ' "$config_file" 2>/dev/null) || { log "Config parse failed, using defaults"; return 0; }
 
     IFS=$'\x1f' read -r MODEL LANGUAGE MAX_LENGTH HEAD_MESSAGES TAIL_MESSAGES \
-      THROTTLE_INTERVAL LIVE_UPDATE DEBUG STYLE <<< "$parsed"
+      THROTTLE_INTERVAL LIVE_UPDATE DEBUG unknown STYLE <<< "$parsed"
     STYLE=$(_trim_text "${STYLE//$'\x1e'/$'\n'}")
 
     # Validate — fall back to defaults on anything unexpected
@@ -172,6 +177,9 @@ load_config() {
     [[ "$THROTTLE_INTERVAL" =~ ^[0-9]+$ ]] || THROTTLE_INTERVAL=60
     [[ "$LIVE_UPDATE" == "true" || "$LIVE_UPDATE" == "false" ]] || LIVE_UPDATE=true
     [[ "$DEBUG" == "true" || "$DEBUG" == "false" ]] || DEBUG=false
+    if [[ -n "$unknown" ]]; then
+      log "Config: unknown keys ignored: $unknown"
+    fi
   fi
   log "Config loaded: model=$MODEL lang=$LANGUAGE maxLen=$MAX_LENGTH ctx=h${HEAD_MESSAGES}+t${TAIL_MESSAGES} throttle=${THROTTLE_INTERVAL}s live=$LIVE_UPDATE style=${#STYLE}ch"
 }
