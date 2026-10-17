@@ -115,8 +115,8 @@ echo ""
 echo "=== promote-fixture finds the log in the plugin data dir ==="
 
 FAKE_HOME="$TMP/home"
-mkdir -p "$FAKE_HOME/.claude/plugins/data/claude-live-title-claude-live-title"
-cp "$LOG" "$FAKE_HOME/.claude/plugins/data/claude-live-title-claude-live-title/debug.log"
+mkdir -p "$FAKE_HOME/.claude/plugins/data/live-title-claude-live-title"
+cp "$LOG" "$FAKE_HOME/.claude/plugins/data/live-title-claude-live-title/debug.log"
 OUT=$(env -u CLAUDE_LIVE_TITLE_DEBUG_LOG HOME="$FAKE_HOME" bash "$PROMOTE" "${SLUG}-found" 2>&1 || true)
 rm -f "$FIX_DIR"/bad-*-"${SLUG}-found".jsonl "$FIX_DIR"/bad-*-"${SLUG}-found".expected.yaml
 if [[ "$OUT" == *"Wrote:"* ]]; then

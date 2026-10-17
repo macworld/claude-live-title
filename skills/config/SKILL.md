@@ -1,13 +1,13 @@
 ---
 name: config
-description: "Use when the user asks to \"view claude-live-title settings\", \"change title language\", \"configure live title\", \"adjust throttle interval\", or \"update claude-live-title config\". Manage plugin configuration for session title generation."
+description: "Use when the user asks to \"view live-title settings\", \"change title language\", \"configure live title\", \"adjust throttle interval\", or \"update live-title config\". Manage plugin configuration for session title generation."
 model: haiku
 allowed-tools: ["Bash", "Read", "Edit", "Write", "AskUserQuestion"]
 ---
 
-# claude-live-title Configuration
+# live-title Configuration
 
-Help the user view or modify their claude-live-title plugin configuration.
+Help the user view or modify their live-title plugin configuration (called claude-live-title before 2.0).
 
 ## Config file location
 

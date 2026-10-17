@@ -15,8 +15,8 @@
 #                                            # the substring
 #
 # The debug log is read from $CLAUDE_LIVE_TITLE_DEBUG_LOG, else the newest of
-# ~/.claude/plugins/data/claude-live-title*/debug.log, else the pre-1.4
-# /tmp/claude-live-title-debug.log.
+# ~/.claude/plugins/data/live-title*/debug.log (claude-live-title* before
+# 2.0), else the pre-1.4 /tmp/claude-live-title-debug.log.
 #
 # Outputs:
 #   tests/fixtures/transcripts/bad-YYYYMMDD-<slug>.jsonl
@@ -56,16 +56,17 @@ find_log() {
     return
   fi
   local newest="" f
-  for f in "$HOME"/.claude/plugins/data/claude-live-title*/debug.log /tmp/claude-live-title-debug.log; do
+  for f in "$HOME"/.claude/plugins/data/live-title*/debug.log \
+           "$HOME"/.claude/plugins/data/claude-live-title*/debug.log /tmp/claude-live-title-debug.log; do
     [[ -f "$f" ]] || continue
     if [[ -z "$newest" || "$f" -nt "$newest" ]]; then newest="$f"; fi
   done
-  printf '%s' "${newest:-$HOME/.claude/plugins/data/claude-live-title/debug.log}"
+  printf '%s' "${newest:-$HOME/.claude/plugins/data/live-title/debug.log}"
 }
 LOG=$(find_log)
 if [[ ! -f "$LOG" ]]; then
   echo "ERROR: debug log not found at $LOG" >&2
-  echo "       Turn on debug via /claude-live-title:config and reproduce first." >&2
+  echo "       Turn on debug via /live-title:config and reproduce first." >&2
   exit 1
 fi
 

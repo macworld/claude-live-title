@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# common.sh — claude-live-title shared function library
+# common.sh — live-title shared function library
 # Sourced by apply-title.sh, live-title.sh and stop-title.sh
 
 # ── Paths ──
 # Hooks always receive CLAUDE_PLUGIN_DATA; the fallback covers old Claude Code
 # versions and scripts run by hand.
-DATA_DIR="${CLAUDE_PLUGIN_DATA:-$HOME/.claude/plugins/data/claude-live-title}"
+DATA_DIR="${CLAUDE_PLUGIN_DATA:-$HOME/.claude/plugins/data/live-title}"
 DATA_DIR="${DATA_DIR%/}"
 STATE_DIR="$DATA_DIR/sessions"
 DEBUG_LOG="${CLAUDE_LIVE_TITLE_DEBUG_LOG:-$DATA_DIR/debug.log}"
@@ -99,9 +99,36 @@ log_replay_event() {
     >> "$DEBUG_LOG"
 }
 
+# ── Rename Migration ──
+# The plugin was called claude-live-title before 2.0. Its data directory is
+# named after the plugin, so the rename starts with an empty one; copy the
+# config and session state over once, or sessions titled before the rename
+# would look as if the user had named them.
+RENAME_MARKER="$DATA_DIR/.migrated-from-claude-live-title"
+migrate_renamed_data_dir() {
+  [[ -e "$RENAME_MARKER" ]] && return 0
+  local base="${DATA_DIR##*/}"
+  local old="${DATA_DIR%/*}/claude-$base"
+  [[ "$base" == live-title* && -d "$old" ]] || return 0
+  mkdir -p "$STATE_DIR" 2>/dev/null || return 0
+  chmod 700 "$STATE_DIR" 2>/dev/null
+  # Two hooks may run this at once; copy-then-rename keeps every file whole.
+  local f dest
+  for f in "$old/config.json" "$old"/sessions/*.json "$old"/sessions/*.pinned; do
+    [[ -f "$f" ]] || continue
+    if [[ "$f" == "$old/config.json" ]]; then dest="$DATA_DIR/config.json"; else dest="$STATE_DIR/${f##*/}"; fi
+    [[ -e "$dest" ]] && continue
+    cp -p "$f" "$dest.$$.tmp" 2>/dev/null && mv -f "$dest.$$.tmp" "$dest" 2>/dev/null
+    rm -f "$dest.$$.tmp" 2>/dev/null
+  done
+  : > "$RENAME_MARKER" 2>/dev/null
+  return 0
+}
+
 # ── Config Loading ──
 load_config() {
   local config_file="$DATA_DIR/config.json"
+  migrate_renamed_data_dir
 
   # Migrate from legacy path if needed
   local legacy_file="$HOME/.claude/plugins/claude-live-title/config.json"
@@ -783,7 +810,7 @@ _parse_model_output() {
 # start a cooldown so a usage limit is not hit again and again.
 _ask_model() {
   local prompt_file
-  prompt_file=$(mktemp "${TMPDIR:-/tmp}/claude-live-title-prompt.XXXXXX") || return 1
+  prompt_file=$(mktemp "${TMPDIR:-/tmp}/live-title-prompt.XXXXXX") || return 1
   printf '%s' "$1" > "$prompt_file"
   local -a modes=(lean basic)
   if [[ -f "$LEAN_UNSUPPORTED_FILE" ]] \

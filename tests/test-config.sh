@@ -84,6 +84,29 @@ else
 fi
 
 echo ""
+echo "=== migration from the claude-live-title data dir (renamed in 2.0) ==="
+OLD="$TMP/plugins-data/claude-live-title-mkt"
+NEW="$TMP/plugins-data/live-title-mkt"
+mkdir -p "$OLD/sessions"
+echo '{"language":"ko"}' > "$OLD/config.json"
+echo '{"latest":"Old title","history":["Old title"],"lastGen":1,"lastHumanCount":2}' > "$OLD/sessions/abc.json"
+: > "$OLD/sessions/def.pinned"
+mkdir "$OLD/sessions/abc.lock"
+LANG_SEEN=$(CLAUDE_PLUGIN_DATA="$NEW" bash -c 'source "$1/hooks/lib/common.sh"; load_config; echo "$LANGUAGE"' _ "$SCRIPT_DIR")
+check_eq() { if [[ "$2" == "$3" ]]; then report PASS "$1"; else report FAIL "$1 — expected [$2] got [$3]"; fi; }
+check_eq "old config is used after the rename" "ko" "$LANG_SEEN"
+check_eq "session state copied" "Old title" "$(jq -r .latest "$NEW/sessions/abc.json" 2>/dev/null)"
+check_eq "pins copied" "yes" "$([[ -f "$NEW/sessions/def.pinned" ]] && echo yes || echo no)"
+check_eq "locks not copied" "no" "$([[ -e "$NEW/sessions/abc.lock" ]] && echo yes || echo no)"
+check_eq "old data dir left in place" "yes" "$([[ -f "$OLD/config.json" ]] && echo yes || echo no)"
+echo '{"language":"fr"}' > "$NEW/config.json"
+echo '{"language":"de"}' > "$OLD/config.json"
+LANG_SEEN=$(CLAUDE_PLUGIN_DATA="$NEW" bash -c 'source "$1/hooks/lib/common.sh"; load_config; echo "$LANGUAGE"' _ "$SCRIPT_DIR")
+check_eq "migration runs once; later changes win" "fr" "$LANG_SEEN"
+LEFTOVER=$(ls -A "$NEW" "$NEW/sessions" | grep -c '\.tmp$' || true)
+check_eq "no temp files left behind" "0" "$LEFTOVER"
+
+echo ""
 echo "================================"
 echo "Results: $PASS passed, $FAIL failed"
 [[ "$FAIL" -eq 0 ]] && echo "All tests passed!" || exit 1

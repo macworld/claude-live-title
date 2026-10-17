@@ -1,6 +1,6 @@
 # Privacy Policy
 
-**claude-live-title** is an open-source Claude Code plugin that runs entirely on your local machine.
+**live-title** (formerly claude-live-title) is an open-source Claude Code plugin that runs entirely on your local machine.
 
 ## Data Collection
 
@@ -11,7 +11,7 @@ This plugin does **not** collect, store, or transmit any personal data or usage 
 - The plugin reads your local session transcript file to extract conversation messages.
 - It calls `claude -p` (Anthropic's CLI) locally to generate a short title from a sample of your messages and an excerpt of Claude's latest reply. The call runs with `--no-session-persistence`, so it is not saved as a session.
 - The generated title is written back to your local session transcript file as a `custom-title` entry.
-- A local configuration file may be stored in the plugin's data directory (`~/.claude/plugins/data/claude-live-title-*/config.json`) containing your preferences (language, throttle settings, etc.).
+- A local configuration file may be stored in the plugin's data directory (`~/.claude/plugins/data/live-title-*/config.json`) containing your preferences (language, throttle settings, etc.).
 
 ## Third-Party Services
 
@@ -19,7 +19,7 @@ This plugin does **not** communicate with any third-party services. The only ext
 
 ## Local Files
 
-All files live in the plugin's data directory (`~/.claude/plugins/data/claude-live-title-*/`):
+All files live in the plugin's data directory (`~/.claude/plugins/data/live-title-*/`):
 
 - `sessions/` — one small state file per session, named by a SHA-256 hash of the session ID. It holds the titles generated for that session, timestamps and a message count, no conversation content. Files older than 30 days are deleted automatically.
 - `cooldown-until`, `lean-flags-unsupported` — timestamps that pause title generation after errors.

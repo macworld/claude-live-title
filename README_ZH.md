@@ -1,6 +1,6 @@
-# Claude Live Title
+# Live Title
 
-为 Claude Code 自动生成有意义的标题，随对话推进动态更新。
+为 Claude Code 自动生成有意义的标题，随对话推进动态更新。原名 `claude-live-title`。
 
 [![License](https://img.shields.io/github/license/macworld/claude-live-title)](LICENSE)
 [![Stars](https://img.shields.io/github/stars/macworld/claude-live-title)](https://github.com/macworld/claude-live-title/stargazers)
@@ -11,7 +11,7 @@
 
 Claude Code 默认用随机 slug（如 `elegant-chasing-eich`）作为会话名。根据第一条消息起标题能好一些，但会话会往前走：你从修登录 Bug 开始，最后可能在重构认证中间件。
 
-claude-live-title 让标题始终对应会话**当前**在做的事。如果你在 tmux 或多个终端里同时开着几个会话，看一眼状态栏就知道哪个是哪个、上次做到哪。搭配 [Claude HUD](#配合-claude-hud-使用) 可以直接在状态栏显示标题。
+Live Title 让标题始终对应会话**当前**在做的事。如果你在 tmux 或多个终端里同时开着几个会话，看一眼状态栏就知道哪个是哪个、上次做到哪。搭配 [Claude HUD](#配合-claude-hud-使用) 可以直接在状态栏显示标题。
 
 ## 特性
 
@@ -64,19 +64,31 @@ flowchart LR
 
 ```
 /plugin marketplace add anthropics/claude-plugins-community
-/plugin install claude-live-title@claude-plugins-community
+/plugin install live-title@claude-plugins-community
 ```
 
 ### 从本仓库直接安装（永远最新）
 
 ```
 /plugin marketplace add macworld/claude-live-title
-/plugin install claude-live-title@claude-live-title
+/plugin install live-title@claude-live-title
 ```
 
 ### 然后重启 Claude Code
 
 Hook 只在启动时注册，必须完整重启才能生效 —— `/reload-plugins` 只能重载 command 和 skill，不能重载 hook。插件开箱即用，无需任何配置。
+
+### 从 claude-live-title 升级
+
+插件在 2.0 从 `claude-live-title` 改名为 `live-title`。用 `--keep-data` 卸载旧插件，安装新插件，然后重启。配置和各会话的标题都会自动带过来。
+
+```bash
+claude plugin uninstall claude-live-title@claude-live-title --keep-data
+claude plugin marketplace update claude-live-title
+claude plugin install live-title@claude-live-title
+```
+
+如果当初是从官方社区目录安装的，把 `@claude-live-title` 换成 `@claude-plugins-community`。
 
 <details>
 <summary><strong>Linux 上安装报 <code>EXDEV: cross-device link not permitted</code>？</strong></summary>
@@ -98,13 +110,13 @@ mkdir -p ~/.cache/tmp && TMPDIR=~/.cache/tmp claude
 使用斜杠命令交互式配置：
 
 ```
-/claude-live-title:config
+/live-title:config
 ```
 
 或直接编辑配置文件。它在插件的数据目录里，目录名取决于你从哪个 marketplace 安装，例如：
 
 ```
-~/.claude/plugins/data/claude-live-title-claude-live-title/config.json
+~/.claude/plugins/data/live-title-claude-live-title/config.json
 ```
 
 ```jsonc
@@ -152,7 +164,7 @@ mkdir -p ~/.cache/tmp && TMPDIR=~/.cache/tmp claude
 
 ## 配合 Claude HUD 使用
 
-[claude-live-title](https://github.com/macworld/claude-live-title) 可与 [Claude HUD](https://github.com/jarrodwatts/claude-hud) 无缝配合。生成的标题会自动显示在 HUD 状态栏中。
+[Live Title](https://github.com/macworld/claude-live-title) 可与 [Claude HUD](https://github.com/jarrodwatts/claude-hud) 无缝配合。生成的标题会自动显示在 HUD 状态栏中。
 
 ### 设置步骤
 
@@ -160,7 +172,7 @@ mkdir -p ~/.cache/tmp && TMPDIR=~/.cache/tmp claude
 
    ```
    /plugin marketplace add macworld/claude-live-title
-   /plugin install claude-live-title
+   /plugin install live-title@claude-live-title
    /plugin marketplace add jarrodwatts/claude-hud
    /plugin install claude-hud
    ```
@@ -186,7 +198,7 @@ mkdir -p ~/.cache/tmp && TMPDIR=~/.cache/tmp claude
 
 ### 集成原理
 
-claude-live-title 将 `custom-title` 记录写入会话 transcript 文件。Claude HUD 读取这些记录并在状态栏显示最新标题，替代默认的随机 slug。标题会随对话推进实时更新。
+Live Title 将 `custom-title` 记录写入会话 transcript 文件。Claude HUD 读取这些记录并在状态栏显示最新标题，替代默认的随机 slug。标题会随对话推进实时更新。
 
 ## 系统要求
 
@@ -197,9 +209,9 @@ claude-live-title 将 `custom-title` 记录写入会话 transcript 文件。Clau
 ## 常见问题
 
 **标题没有出现？**
-1. 确认插件已安装并启用：在已启用插件列表中查找 `claude-live-title`
+1. 确认插件已安装并启用：在已启用插件列表中查找 `live-title`
 2. 安装或更新后重启 Claude Code，hook 只在启动时加载
-3. 在配置中设置 `"debug": true`，然后查看 `~/.claude/plugins/data/claude-live-title-*/debug.log`
+3. 在配置中设置 `"debug": true`，然后查看 `~/.claude/plugins/data/live-title-*/debug.log`
 
 **某个会话不再更新了？**
 - 如果你给它改过名（`/rename`、`--name`），插件会刻意保留你的名字。

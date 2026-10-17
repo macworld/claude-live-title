@@ -1,6 +1,6 @@
-# claude-live-title
+# live-title
 
-Claude Code plugin: auto-generate meaningful session titles in real-time.
+Claude Code plugin: auto-generate meaningful session titles in real-time. The plugin is named `live-title` (renamed from `claude-live-title` in 2.0, because `claude-` names are reserved); the repo and marketplace keep the old name.
 
 ## Dev Conventions
 

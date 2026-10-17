@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [2.0.0] - 2026-10-17
+
+### Changed
+- **Renamed from `claude-live-title` to `live-title`.** Claude Code now reserves plugin names starting with `claude-` for Anthropic's own plugins, and `claude plugin validate` rejects the old name. The plugin ID becomes `live-title@<marketplace>` and the config command `/live-title:config`. The GitHub repo and the `claude-live-title` marketplace keep their names.
+- To upgrade: `claude plugin uninstall claude-live-title@<marketplace> --keep-data`, then `claude plugin install live-title@<marketplace>` and restart. On first run the config and session state are copied from the old data directory, so sessions titled before the rename keep updating.
+
 ## [1.4.0] - 2026-10-17
 
 ### Fixed
