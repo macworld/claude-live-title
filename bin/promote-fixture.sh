@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # bin/promote-fixture.sh
 #
-# Promote a logged dialog+title pair from /tmp/claude-live-title-debug.log
-# into a reusable test fixture under tests/fixtures/transcripts/. Requires
-# the plugin's DEBUG=true to have been on while the bad title was generated
+# Promote a logged dialog+title pair from the plugin's debug log into a
+# reusable test fixture under tests/fixtures/transcripts/. Requires the
+# plugin's debug option to have been on while the bad title was generated
 # (otherwise no replay event was logged).
 #
 # Usage:
@@ -14,12 +14,16 @@
 #                                            # whose dialog or title contains
 #                                            # the substring
 #
+# The debug log is read from $CLAUDE_LIVE_TITLE_DEBUG_LOG, else the newest of
+# ~/.claude/plugins/data/claude-live-title*/debug.log, else the pre-1.4
+# /tmp/claude-live-title-debug.log.
+#
 # Outputs:
 #   tests/fixtures/transcripts/bad-YYYYMMDD-<slug>.jsonl
 #   tests/fixtures/transcripts/bad-YYYYMMDD-<slug>.expected.yaml (stub)
 #
-# After promotion, edit the expected.yaml file to fill in must_contain_any
-# and must_not_contain assertions (left empty by default).
+# After promotion, edit the expected.yaml file to fill in the assertions
+# (left empty by default).
 set -eu
 
 usage() {
@@ -46,10 +50,22 @@ if [[ ! "$SLUG" =~ ^[a-zA-Z0-9-]+$ ]]; then
   exit 1
 fi
 
-LOG="${CLAUDE_LIVE_TITLE_DEBUG_LOG:-/tmp/claude-live-title-debug.log}"
+find_log() {
+  if [[ -n "${CLAUDE_LIVE_TITLE_DEBUG_LOG-}" ]]; then
+    printf '%s' "$CLAUDE_LIVE_TITLE_DEBUG_LOG"
+    return
+  fi
+  local newest="" f
+  for f in "$HOME"/.claude/plugins/data/claude-live-title*/debug.log /tmp/claude-live-title-debug.log; do
+    [[ -f "$f" ]] || continue
+    if [[ -z "$newest" || "$f" -nt "$newest" ]]; then newest="$f"; fi
+  done
+  printf '%s' "${newest:-$HOME/.claude/plugins/data/claude-live-title/debug.log}"
+}
+LOG=$(find_log)
 if [[ ! -f "$LOG" ]]; then
   echo "ERROR: debug log not found at $LOG" >&2
-  echo "       Set DEBUG=true via /claude-live-title:config and reproduce first." >&2
+  echo "       Turn on debug via /claude-live-title:config and reproduce first." >&2
   exit 1
 fi
 
@@ -85,13 +101,15 @@ if [[ -z "$DIALOG" ]]; then
   exit 1
 fi
 
-# Parse dialog: GOAL: line, USER: lines, STATE: line
-GOAL=$(printf '%s\n' "$DIALOG" | sed -n 's/^GOAL: //p' | head -1)
-STATE=$(printf '%s\n' "$DIALOG" | sed -n 's/^STATE: //p' | head -1)
+# Parse the dialog. Current format (1.4+):
+#   CURRENT_TITLE / FIRST / EARLIER... / LATEST / CLAUDE
+# Older logs: GOAL / USER... / STATE.
+CURRENT=$(printf '%s\n' "$DIALOG" | sed -n 's/^CURRENT_TITLE: //p' | head -1)
+CLAUDE=$(printf '%s\n' "$DIALOG" | sed -n -e 's/^CLAUDE: //p' -e 's/^STATE: //p' | head -1)
 USERS=()
 while IFS= read -r u; do
   [[ -n "$u" ]] && USERS+=("$u")
-done < <(printf '%s\n' "$DIALOG" | sed -n 's/^USER: //p')
+done < <(printf '%s\n' "$DIALOG" | sed -n -E 's/^(FIRST|EARLIER|LATEST|GOAL|USER): //p')
 
 # Resolve repo root and fixture paths
 REPO_ROOT=$(git -C "$(dirname "$0")/.." rev-parse --show-toplevel 2>/dev/null \
@@ -111,30 +129,33 @@ fi
 
 mkdir -p "$FIX_DIR"
 
+# The title shown at the time goes in as a custom-title record before the
+# latest message, which is where Claude Code would have had it.
 {
-  if [[ -n "$GOAL" ]]; then
-    jq -nc --arg c "$GOAL" '{type:"user", message:{content:$c}}'
-  fi
-  for u in "${USERS[@]}"; do
-    jq -nc --arg c "$u" '{type:"user", message:{content:$c}}'
+  n=${#USERS[@]}
+  for (( i = 0; i < n; i++ )); do
+    if (( i == n - 1 )) && [[ -n "$CURRENT" ]]; then
+      jq -nc --arg t "$CURRENT" '{type:"custom-title", customTitle:$t}'
+    fi
+    jq -nc --arg c "${USERS[$i]}" '{type:"user", origin:{kind:"human"}, message:{role:"user", content:$c}}'
   done
-  if [[ -n "$STATE" ]]; then
-    jq -nc --arg t "$STATE" '{type:"assistant", message:{content:[{type:"text", text:$t}]}}'
+  if [[ -n "$CLAUDE" ]]; then
+    jq -nc --arg t "$CLAUDE" '{type:"assistant", message:{content:[{type:"text", text:$t}]}}'
   fi
 } > "$TX"
 
 cat > "$EXP" <<EOF
-# Fixture promoted from /tmp/claude-live-title-debug.log on $DATE.
+# Fixture promoted from $LOG on $DATE.
 # Original session id: ${SID:-(unknown)}
 # Title that was generated (review and decide what assertions matter):
 #   observed_title: "$TITLE"
 #
-# Edit must_contain_any and must_not_contain below. Test harness in
-# tests/test-fixtures.sh enforces these against the dialog Haiku sees by
-# default; with RUN_LIVE=1 it also runs the real model and asserts on the
-# title.
+# tests/test-fixtures.sh checks must_not_contain against the dialog the
+# model sees. With RUN_LIVE=1 it also calls the real model and checks the
+# title against all four keys.
 must_contain_any: []
 must_not_contain: []
+title_must_not_contain: []
 max_display_columns: 30
 EOF
 
@@ -142,4 +163,4 @@ echo "Wrote: $TX"
 echo "Wrote: $EXP"
 echo ""
 echo "Observed title was: $TITLE"
-echo "Now edit $EXP to fill in must_contain_any / must_not_contain."
+echo "Now edit $EXP to fill in the assertions."

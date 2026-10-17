@@ -1,0 +1,7 @@
+{"type":"user","origin":{"kind":"human"},"promptSource":"typed","message":{"role":"user","content":"research how other apps handle offline sync conflicts"}}
+{"type":"assistant","message":{"model":"claude-opus-5-5","content":[{"type":"text","text":"Common approaches: last-write-wins, CRDTs, and manual merge prompts. Notion and Figma use variants of CRDTs."}]}}
+{"type":"custom-title","customTitle":"Research offline sync conflicts"}
+{"type":"user","origin":{"kind":"human"},"promptSource":"typed","message":{"role":"user","content":"what are the tradeoffs of last-write-wins for us?"}}
+{"type":"assistant","message":{"model":"claude-opus-5-5","content":[{"type":"text","text":"It's simple and fits our single-editor documents, but can drop concurrent edits from two devices."}]}}
+{"type":"user","origin":{"kind":"human"},"promptSource":"typed","message":{"role":"user","content":"ok let's implement last-write-wins in sync/merge.ts with a per-field timestamp"}}
+{"type":"assistant","message":{"model":"claude-opus-5-5","content":[{"type":"text","text":"Starting with the merge function in sync/merge.ts and a fieldUpdatedAt map on the record."}]}}

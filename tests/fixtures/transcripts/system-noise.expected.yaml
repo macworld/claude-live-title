@@ -1,0 +1,7 @@
+# Task notifications, subagent messages, skill bodies and compact summaries
+# arrive as "user" entries but are not the person. Only the two typed
+# messages may reach the dialog.
+must_contain_any: ["CSV", "csv", "Export", "export"]
+must_not_contain: ["task-notification", "Another Claude session", "Base directory for this skill", "being continued", "billing", "ship it"]
+title_must_not_contain: []
+max_display_columns: 30

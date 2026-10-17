@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
-# live-title.sh — UserPromptSubmit hook entry point
-# Generates/updates session title in real-time with throttling.
-# Fires immediately when the user submits a message, so the title is
-# typically ready before Claude finishes responding (and before HUD renders).
+# live-title.sh — UserPromptSubmit hook (async)
+# Generates a fresh title as soon as the user sends a message, in parallel
+# with Claude's reply. Prompts Claude Code starts on its own (task
+# notifications, subagent hand-backs, messages from other sessions) don't
+# change what the user asked for, so they're skipped; stop-title.sh covers
+# long autonomous runs.
 set -eu
 
 # Skip when invoked by our own `claude -p` subsession — otherwise the
@@ -15,90 +17,77 @@ source "${SCRIPT_DIR}/lib/common.sh"
 # ── Initialize ──
 detect_platform
 INPUT=$(cat)
-SESSION_ID=$(echo "$INPUT" | jq -r '.session_id // empty')
-TRANSCRIPT_PATH=$(echo "$INPUT" | jq -r '.transcript_path // empty')
+exec >/dev/null
+IFS=$'\x1f' read -r SESSION_ID TRANSCRIPT_PATH PROMPT_ID CC_TITLE <<< "$(printf '%s' "$INPUT" | jq -r \
+  '[(.session_id // ""), (.transcript_path // ""), (.prompt_id // ""), (.session_title // "" | gsub("[\\r\\n]"; " "))] | join("\u001f")')"
 # UserPromptSubmit delivers the current prompt here before it's in transcript.
-PROMPT=$(echo "$INPUT" | jq -r '.prompt // empty')
+PROMPT=$(printf '%s' "$INPUT" | jq -r '.prompt // empty')
 
 [[ -z "$SESSION_ID" || -z "$TRANSCRIPT_PATH" ]] && exit 0
 
-SAFE_ID=$(sanitize_session_id "$SESSION_ID")
-[[ -z "$SAFE_ID" ]] && exit 0
-
 load_config
-
-# ── Check live update switch ──
 [[ "$LIVE_UPDATE" != "true" ]] && { log "Live update disabled"; exit 0; }
 
-# ── Acquire lock BEFORE waiting / generating ──
-# Holding the lock early lets the Stop hook see "Live is working" and defer,
-# preventing both hooks from generating titles concurrently.
-LOCK_DIR="/tmp/claude-live-title-lock-${SAFE_ID}"
-acquire_lock "$LOCK_DIR" || exit 0
-trap 'release_lock "$LOCK_DIR"' EXIT
+state_init "$(sanitize_session_id "$SESSION_ID")"
+is_pinned && { log "Session pinned, skipping"; exit 0; }
+cooldown_active && { log "Cooldown active, skipping"; exit 0; }
 
-# ── Wait for transcript (fresh-session race) ──
-# On turn 1 of a brand-new session, UserPromptSubmit can fire ~100ms before
-# CC creates the transcript file. Poll briefly for it to appear.
+log "live-title triggered: session=$SESSION_ID"
+
+# ── Find this prompt in the transcript ──
+# On turn 1 of a brand-new session the transcript file appears ~100ms after
+# this hook fires, and the prompt's entry lands ~100-200ms later. The entry
+# carries `origin`, which tells a typed prompt from one Claude Code started.
+ENTRY=""
 WAIT_ITERS=0
-while [[ ! -f "$TRANSCRIPT_PATH" && "$WAIT_ITERS" -lt 10 ]]; do
+while [[ "$WAIT_ITERS" -lt 20 ]]; do
+  if [[ -f "$TRANSCRIPT_PATH" ]]; then
+    [[ -z "$PROMPT_ID" ]] && break
+    ENTRY=$(find_prompt_entry "$TRANSCRIPT_PATH" "$PROMPT_ID")
+    [[ -n "$ENTRY" ]] && break
+  fi
   sleep 0.1
   WAIT_ITERS=$(( WAIT_ITERS + 1 ))
 done
-[[ ! -f "$TRANSCRIPT_PATH" ]] && exit 0
+[[ ! -f "$TRANSCRIPT_PATH" ]] && { log "Transcript never appeared"; exit 0; }
 
-log "live-title triggered: session=$SESSION_ID (safe=$SAFE_ID) transcript_wait=${WAIT_ITERS}x100ms"
-
-# ── Count user messages ──
-TOTAL_MSGS=$(jq -c 'select(.type == "user")' "$TRANSCRIPT_PATH" 2>/dev/null | wc -l || echo 0)
-# On a brand-new session the transcript has no user entries yet, but we can
-# still title from $PROMPT alone. Only bail when we truly have nothing.
-[[ "$TOTAL_MSGS" -eq 0 && -z "$PROMPT" ]] && exit 0
-
-# ── Throttle check ──
-NOW=$(date +%s)
-STATE_FILE="/tmp/claude-live-title-state-${SAFE_ID}"
-
-if [[ -f "$STATE_FILE" ]]; then
-  if read -r LAST_TIME LAST_COUNT < "$STATE_FILE" 2>/dev/null \
-     && [[ -n "$LAST_TIME" && -n "$LAST_COUNT" ]]; then
-    ELAPSED=$(( NOW - LAST_TIME ))
-    NEW_MSGS=$(( TOTAL_MSGS - LAST_COUNT ))
-    if [[ "$ELAPSED" -lt "$THROTTLE_INTERVAL" || "$NEW_MSGS" -lt "$THROTTLE_MESSAGES" ]]; then
-      log "Throttled: elapsed=${ELAPSED}s new_msgs=${NEW_MSGS}"
-      exit 0
-    fi
-  else
-    # Corrupted state file, remove and treat as first run
-    rm -f "$STATE_FILE"
-  fi
+if [[ -n "$ENTRY" ]]; then
+  PROMPT_TEXT=$(entry_human_text "$ENTRY")
+else
+  PROMPT_TEXT=$(prompt_human_text "$PROMPT")
 fi
-# No state file = first run in this session, proceed immediately
+log "prompt wait=${WAIT_ITERS}x100ms entry=$([[ -n "$ENTRY" ]] && echo found || echo missing) human=$([[ -n "$PROMPT_TEXT" ]] && echo yes || echo no)"
+[[ -z "$PROMPT_TEXT" ]] && exit 0
 
-# ── Extract, generate, write ──
-GOAL=$(extract_goal_message "$TRANSCRIPT_PATH")
-# Fresh-session turn-1 race: transcript hasn't been flushed yet, but the
-# prompt itself is the goal.
-[[ -z "$GOAL" && -n "$PROMPT" ]] && GOAL="$PROMPT"
+# ── Generate under the session lock ──
+# Wait for a generation that's already running (previous prompt or Stop)
+# instead of racing it; the throttle below then decides.
+acquire_lock "$LOCK_DIR" 30 || exit 0
+trap 'release_lock "$LOCK_DIR"' EXIT
 
-USER_MSGS=$(extract_user_messages "$TRANSCRIPT_PATH" "$PROMPT" "$GOAL" || true)
-AI_RAW=$(extract_last_ai_text "$TRANSCRIPT_PATH")
-AI_TEXT=$(sanitize_ai_text "$AI_RAW")
-DIALOG=$(format_dialog "$GOAL" "$USER_MSGS" "$AI_TEXT")
+HUMANS=$(extract_human_messages "$TRANSCRIPT_PATH")
+if [[ -z "$ENTRY" ]]; then
+  # Older Claude Code (no prompt_id) or the entry is still in flight.
+  HUMANS=$(printf '%s' "$HUMANS" | jq -c --arg p "$PROMPT_TEXT" \
+    'if (.[-1] // "") == $p then . else . + [$p] end')
+fi
+HUMAN_COUNT=$(printf '%s' "$HUMANS" | jq 'length')
 
-[[ -z "$DIALOG" ]] && { log "Empty dialog, skipping"; exit 0; }
+state_bootstrap "$TRANSCRIPT_PATH" "$CC_TITLE" "$HUMAN_COUNT"
+is_pinned && exit 0
+state_load
+check_foreign_title "$CC_TITLE" || exit 0
 
-TITLE_RAW=$(generate_title "$DIALOG") || { log "Title generation failed"; exit 0; }
-TITLE=$(clean_title "$TITLE_RAW")
-
-if [[ -z "$TITLE" ]]; then
-  log "Title empty after cleanup"
+if [[ -n "$ST_LATEST" ]] && only_acks_since "$HUMANS" "$ST_LAST_HUMAN"; then
+  log "Only acknowledgements since the last title; keeping it"
+  state_save "$ST_LATEST" "$ST_LAST_GEN" "$HUMAN_COUNT"
   exit 0
 fi
 
-write_title "$TRANSCRIPT_PATH" "$TITLE" "$SESSION_ID"
-log_replay_event "$DIALOG" "$TITLE" "$SESSION_ID"
+NOW=$(date +%s)
+if [[ -n "$ST_LATEST" ]] && (( NOW - ST_LAST_GEN < THROTTLE_INTERVAL )); then
+  log "Throttled: last generation $(( NOW - ST_LAST_GEN ))s ago; Stop will catch up"
+  exit 0
+fi
 
-# ── Update state AFTER successful generation ──
-echo "$NOW $TOTAL_MSGS" > "$STATE_FILE"
-log "State updated: time=$NOW msgs=$TOTAL_MSGS"
+title_update "$TRANSCRIPT_PATH" "$SESSION_ID" "$HUMANS" "prompt"

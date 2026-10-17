@@ -1,0 +1,7 @@
+# The user writes Chinese, Claude and the code are English. The title stays
+# in Chinese, and short follow-ups (继续) keep the current title.
+must_contain_any: ["总览", "后台", "布局"]
+must_not_contain: []
+title_must_not_contain: ["Dashboard", "grid"]
+max_display_columns: 30
+keep_current_title: true

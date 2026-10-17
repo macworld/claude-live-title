@@ -1,15 +1,32 @@
 #!/usr/bin/env bash
 # common.sh — claude-live-title shared function library
-# Sourced by live-title.sh and stop-title.sh
+# Sourced by apply-title.sh, live-title.sh and stop-title.sh
 
-# ── Internal Constants ──
-MAX_INPUT_CHARS=8000
-DEBUG_LOG="/tmp/claude-live-title-debug.log"
+# ── Paths ──
+# Hooks always receive CLAUDE_PLUGIN_DATA; the fallback covers old Claude Code
+# versions and scripts run by hand.
+DATA_DIR="${CLAUDE_PLUGIN_DATA:-$HOME/.claude/plugins/data/claude-live-title}"
+DATA_DIR="${DATA_DIR%/}"
+STATE_DIR="$DATA_DIR/sessions"
+DEBUG_LOG="${CLAUDE_LIVE_TITLE_DEBUG_LOG:-$DATA_DIR/debug.log}"
+COOLDOWN_FILE="$DATA_DIR/cooldown-until"
+LEAN_UNSUPPORTED_FILE="$DATA_DIR/lean-flags-unsupported"
 
 # Resolve once at source time so callers anywhere in the repo can find the
 # sanitize line-rule catalog regardless of cwd.
 COMMON_SH_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SANITIZE_RULES_FILE="${COMMON_SH_DIR}/sanitize-line-rules.tsv"
+
+# ── Internal Constants ──
+LOCK_STALE_SECS=90          # > model timeout, so a live lock never looks stale
+MODEL_TIMEOUT_SECS=45       # watchdog for the `claude -p` helper call
+REFRESH_INTERVAL=900        # Stop re-checks the title after this much activity
+QUOTA_COOLDOWN_SECS=600     # pause all sessions after a usage-limit error
+ERROR_COOLDOWN_SECS=120     # pause after any other failed call
+LEAN_RETRY_SECS=86400       # how long to remember that lean flags failed
+DEBUG_LOG_MAX_BYTES=1048576
+STATE_RETENTION_DAYS=30
+HISTORY_MAX=100
 
 # ── Session ID Sanitization ──
 # Derive a filesystem-safe key from session_id via SHA-256 (collision-free)
@@ -26,10 +43,9 @@ sanitize_session_id() {
 MODEL="haiku"
 LANGUAGE="auto"
 MAX_LENGTH=30
-HEAD_MESSAGES=3
+HEAD_MESSAGES=1
 TAIL_MESSAGES=5
-THROTTLE_INTERVAL=240
-THROTTLE_MESSAGES=2
+THROTTLE_INTERVAL=60
 LIVE_UPDATE=true
 DEBUG=false
 
@@ -43,68 +59,84 @@ detect_platform() {
 }
 
 # ── Debug Logging ──
-log() {
-  if [[ "$DEBUG" == "true" ]]; then
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] [$$] $*" >> "$DEBUG_LOG"
+# The log holds conversation excerpts, so it lives in the private plugin data
+# dir (mode 600) and is rotated once it passes DEBUG_LOG_MAX_BYTES.
+_DEBUG_READY=""
+_debug_prepare() {
+  [[ -n "$_DEBUG_READY" ]] && return 0
+  mkdir -p "$(dirname "$DEBUG_LOG")" 2>/dev/null || return 1
+  if [[ -f "$DEBUG_LOG" ]]; then
+    local size
+    size=$(wc -c < "$DEBUG_LOG" 2>/dev/null | tr -d ' ')
+    if [[ "${size:-0}" -gt "$DEBUG_LOG_MAX_BYTES" ]]; then
+      mv -f "$DEBUG_LOG" "$DEBUG_LOG.1" 2>/dev/null || true
+    fi
   fi
+  ( umask 077; : >> "$DEBUG_LOG" ) 2>/dev/null || return 1
+  _DEBUG_READY=1
 }
 
-# Append one structured JSON line to the debug log capturing the dialog
-# fed to Haiku and the cleaned title that came back. Only emitted when
-# DEBUG=true. Used by `bin/promote-fixture.sh` to turn a bad title into a
-# repeatable test fixture without hand-copying transcript content.
+log() {
+  [[ "$DEBUG" == "true" ]] || return 0
+  _debug_prepare || return 0
+  printf '[%s] [%s] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$$" "$*" >> "$DEBUG_LOG"
+}
+
+# Append one structured JSON line capturing the dialog fed to the model and
+# the cleaned title that came back. Only emitted when DEBUG=true. Used by
+# `bin/promote-fixture.sh` to turn a bad title into a repeatable test fixture.
 log_replay_event() {
-  if [[ "$DEBUG" == "true" ]]; then
-    local dialog="$1" title="$2" session_id="${3-}"
-    jq -nc \
-      --arg ts "$(date -Iseconds 2>/dev/null || date +%Y-%m-%dT%H:%M:%S%z)" \
-      --arg sid "$session_id" \
-      --arg dialog "$dialog" \
-      --arg title "$title" \
-      '{event:"title-generated", ts:$ts, session_id:$sid, dialog:$dialog, title:$title}' \
-      >> "$DEBUG_LOG"
-  fi
+  [[ "$DEBUG" == "true" ]] || return 0
+  _debug_prepare || return 0
+  local dialog="$1" title="$2" session_id="${3-}" trigger="${4-}"
+  jq -nc \
+    --arg ts "$(date -Iseconds 2>/dev/null || date +%Y-%m-%dT%H:%M:%S%z)" \
+    --arg sid "$session_id" \
+    --arg trigger "$trigger" \
+    --arg dialog "$dialog" \
+    --arg title "$title" \
+    '{event:"title-generated", ts:$ts, session_id:$sid, trigger:$trigger, dialog:$dialog, title:$title}' \
+    >> "$DEBUG_LOG"
 }
 
 # ── Config Loading ──
 load_config() {
-  local config_dir="${CLAUDE_PLUGIN_DATA:-$HOME/.claude/plugins/data/claude-live-title}"
-  local config_file="$config_dir/config.json"
+  local config_file="$DATA_DIR/config.json"
 
   # Migrate from legacy path if needed
   local legacy_file="$HOME/.claude/plugins/claude-live-title/config.json"
   if [[ ! -f "$config_file" && -f "$legacy_file" && "$config_file" != "$legacy_file" ]]; then
-    mkdir -p "$config_dir"
-    cp "$legacy_file" "$config_file"
+    mkdir -p "$DATA_DIR" && cp "$legacy_file" "$config_file"
     log "Migrated config from $legacy_file to $config_file"
   fi
 
   if [[ -f "$config_file" ]]; then
+    # One jq pass. `opt` treats only a missing/null key as unset, so an
+    # explicit `false` survives (jq's `//` would replace it with the default).
     local parsed
-    parsed=$(jq '.' "$config_file" 2>/dev/null) || { log "Config parse failed, using defaults"; return 0; }
+    parsed=$(jq -r '
+      def opt($k; $d): if type == "object" and has($k) and .[$k] != null then .[$k] else $d end;
+      (.contextMessages | if type == "object" then . else {} end) as $ctx
+      | [ opt("model"; "haiku"), opt("language"; "auto"), opt("maxLength"; 30),
+          ($ctx | opt("head"; 1)), ($ctx | opt("tail"; 5)),
+          opt("throttleInterval"; 60), opt("liveUpdate"; true), opt("debug"; false) ]
+      | map(tostring) | join("\u001f")
+    ' "$config_file" 2>/dev/null) || { log "Config parse failed, using defaults"; return 0; }
 
-    MODEL=$(echo "$parsed" | jq -r '.model // "haiku"')
-    LANGUAGE=$(echo "$parsed" | jq -r '.language // "auto"')
-    MAX_LENGTH=$(echo "$parsed" | jq -r '.maxLength // 30')
-    HEAD_MESSAGES=$(echo "$parsed" | jq -r '.contextMessages.head // 3')
-    TAIL_MESSAGES=$(echo "$parsed" | jq -r '.contextMessages.tail // 5')
-    THROTTLE_INTERVAL=$(echo "$parsed" | jq -r '.throttleInterval // 240')
-    THROTTLE_MESSAGES=$(echo "$parsed" | jq -r '.throttleMessages // 2')
-    LIVE_UPDATE=$(echo "$parsed" | jq -r '.liveUpdate // true')
-    DEBUG=$(echo "$parsed" | jq -r '.debug // false')
+    IFS=$'\x1f' read -r MODEL LANGUAGE MAX_LENGTH HEAD_MESSAGES TAIL_MESSAGES \
+      THROTTLE_INTERVAL LIVE_UPDATE DEBUG <<< "$parsed"
 
-    # Validate numeric fields — fall back to defaults if not integers
-    [[ "$MAX_LENGTH" =~ ^[0-9]+$ ]] || MAX_LENGTH=30
-    [[ "$HEAD_MESSAGES" =~ ^[0-9]+$ ]] || HEAD_MESSAGES=3
+    # Validate — fall back to defaults on anything unexpected
+    [[ -n "$MODEL" ]] || MODEL="haiku"
+    [[ -n "$LANGUAGE" ]] || LANGUAGE="auto"
+    [[ "$MAX_LENGTH" =~ ^[1-9][0-9]*$ ]] || MAX_LENGTH=30
+    [[ "$HEAD_MESSAGES" =~ ^[0-9]+$ ]] || HEAD_MESSAGES=1
     [[ "$TAIL_MESSAGES" =~ ^[0-9]+$ ]] || TAIL_MESSAGES=5
-    [[ "$THROTTLE_INTERVAL" =~ ^[0-9]+$ ]] || THROTTLE_INTERVAL=240
-    [[ "$THROTTLE_MESSAGES" =~ ^[0-9]+$ ]] || THROTTLE_MESSAGES=2
-
-    # Validate boolean fields — fall back to defaults if not true/false
+    [[ "$THROTTLE_INTERVAL" =~ ^[0-9]+$ ]] || THROTTLE_INTERVAL=60
     [[ "$LIVE_UPDATE" == "true" || "$LIVE_UPDATE" == "false" ]] || LIVE_UPDATE=true
     [[ "$DEBUG" == "true" || "$DEBUG" == "false" ]] || DEBUG=false
   fi
-  log "Config loaded: model=$MODEL lang=$LANGUAGE maxLen=$MAX_LENGTH ctx=h${HEAD_MESSAGES}+t${TAIL_MESSAGES} throttle=${THROTTLE_INTERVAL}s/${THROTTLE_MESSAGES}msgs live=$LIVE_UPDATE"
+  log "Config loaded: model=$MODEL lang=$LANGUAGE maxLen=$MAX_LENGTH ctx=h${HEAD_MESSAGES}+t${TAIL_MESSAGES} throttle=${THROTTLE_INTERVAL}s live=$LIVE_UPDATE"
 }
 
 # ── Cross-Platform File Timestamps ──
@@ -131,7 +163,6 @@ get_file_times() {
   local file="$1"
   ORIG_ATIME=$(get_atime "$file")
   ORIG_MTIME=$(get_mtime "$file")
-  log "Saved timestamps: atime=$ORIG_ATIME mtime=$ORIG_MTIME"
 }
 
 restore_file_times() {
@@ -146,35 +177,194 @@ restore_file_times() {
     touch -a -d "@${ORIG_ATIME}" "$file" 2>/dev/null || true
     touch -m -d "@${ORIG_MTIME}" "$file" 2>/dev/null || true
   fi
-  log "Restored timestamps for $file"
+}
+
+# ── Per-Session State ──
+# ${STATE_DIR}/<sha>.json    {latest, history[], lastGen, lastHumanCount}
+# ${STATE_DIR}/<sha>.pinned  the user (or another tool) named the session
+# ${STATE_DIR}/<sha>.lock    mkdir lock held while a title is generated
+# The JSON file is only rewritten under the lock, always via tmp + mv, so the
+# sync apply hook can read it lock-free.
+
+state_init() {
+  local safe_id="$1"
+  STATE_FILE="$STATE_DIR/$safe_id.json"
+  PIN_FILE="$STATE_DIR/$safe_id.pinned"
+  LOCK_DIR="$STATE_DIR/$safe_id.lock"
+  # Files the ≤1.3 versions kept in /tmp; read once by state_bootstrap.
+  LEGACY_STATE="/tmp/claude-live-title-state-$safe_id"
+  LEGACY_MARKER="/tmp/claude-live-title-named-$safe_id"
+  LEGACY_LOCK="/tmp/claude-live-title-lock-$safe_id"
+  ( umask 077; mkdir -p "$STATE_DIR" ) 2>/dev/null || true
+}
+
+is_pinned() { [[ -f "$PIN_FILE" ]]; }
+
+pin_session() {
+  : > "$PIN_FILE" 2>/dev/null || true
+  log "Pinned: $1"
+}
+
+# Populate ST_LATEST / ST_LAST_GEN / ST_LAST_HUMAN. ST_EXISTS=false when the
+# session has never been seen by this plugin version.
+state_load() {
+  ST_EXISTS=false
+  ST_LATEST=""
+  ST_LAST_GEN=0
+  ST_LAST_HUMAN=0
+  [[ -f "$STATE_FILE" ]] || return 0
+  local parsed
+  parsed=$(jq -r '[(.latest // ""), (.lastGen // 0 | tostring), (.lastHumanCount // 0 | tostring)] | join("\u001f")' \
+    "$STATE_FILE" 2>/dev/null) || return 0
+  ST_EXISTS=true
+  IFS=$'\x1f' read -r ST_LATEST ST_LAST_GEN ST_LAST_HUMAN <<< "$parsed"
+  [[ "$ST_LAST_GEN" =~ ^[0-9]+$ ]] || ST_LAST_GEN=0
+  [[ "$ST_LAST_HUMAN" =~ ^[0-9]+$ ]] || ST_LAST_HUMAN=0
+}
+
+# Was this title produced by the plugin for this session?
+state_has_title() {
+  [[ -f "$STATE_FILE" ]] || return 1
+  jq -e --arg t "$1" 'any((.history // [])[]; . == $t)' "$STATE_FILE" >/dev/null 2>&1
+}
+
+# state_save <latest> <lastGen> <lastHumanCount> [extra-history-json-array]
+state_save() {
+  local latest="$1" gen="$2" human="$3" extra="${4-[]}"
+  local tmp="$STATE_FILE.tmp.$$"
+  { cat "$STATE_FILE" 2>/dev/null || echo '{}'; } \
+    | jq -c --arg l "$latest" --argjson g "$gen" --argjson h "$human" \
+        --argjson extra "$extra" --argjson max "$HISTORY_MAX" '
+        (if type == "object" then . else {} end)
+        | .v = 1 | .latest = $l | .lastGen = $g | .lastHumanCount = $h
+        | .history = (((.history // []) + $extra + (if $l == "" then [] else [$l] end))
+            | reduce .[] as $x ([]; if any(.[]; . == $x) then . else . + [$x] end)
+            | .[-$max:])
+      ' > "$tmp" 2>/dev/null \
+    && mv -f "$tmp" "$STATE_FILE" 2>/dev/null
+  rm -f "$tmp" 2>/dev/null
+  return 0
+}
+
+# Create state for a session this plugin version hasn't seen yet. Titles that
+# are already on the session count as ours only when there's evidence we wrote
+# them: legacy (≤1.3) /tmp markers, or another session's history (a fork).
+# Anything else was named by the user or another tool, so the session is pinned.
+state_bootstrap() {
+  local transcript="$1" cc_title="${2-}" human_count="${3-0}"
+  [[ -f "$STATE_FILE" ]] && return 0
+
+  local titles last
+  titles=$(list_custom_titles "$transcript")
+  [[ -n "$cc_title" ]] && titles=${titles:+$titles$'\n'}$cc_title
+  last=$(printf '%s\n' "$titles" | awk 'NF' | tail -1)
+
+  if [[ -z "$last" ]]; then
+    state_save "" 0 0
+    log "Bootstrap: fresh session"
+    return 0
+  fi
+
+  local ours=false legacy_gen=0
+  if [[ -f "$LEGACY_STATE" || -d "$LEGACY_MARKER" ]]; then
+    ours=true
+    [[ -f "$LEGACY_STATE" ]] && read -r legacy_gen _ < "$LEGACY_STATE" 2>/dev/null
+    [[ "$legacy_gen" =~ ^[0-9]+$ ]] || legacy_gen=0
+  elif _title_in_other_state "$last"; then
+    ours=true
+  fi
+
+  if [[ "$ours" == "true" ]]; then
+    local hist
+    hist=$(printf '%s\n' "$titles" | awk 'NF' | jq -R . | jq -sc .)
+    state_save "$last" "$legacy_gen" "$human_count" "$hist"
+    log "Bootstrap: adopted existing titles (latest='$last')"
+  else
+    state_save "" 0 0
+    pin_session "existing title '$last' was not written by this plugin"
+  fi
+  rm -f "$LEGACY_STATE" 2>/dev/null
+  rm -rf "$LEGACY_MARKER" "$LEGACY_LOCK" 2>/dev/null
+  return 0
+}
+
+_title_in_other_state() {
+  local t="$1" f
+  for f in "$STATE_DIR"/*.json; do
+    [[ -f "$f" && "$f" != "$STATE_FILE" ]] || continue
+    jq -e --arg t "$t" 'any((.history // [])[]; . == $t)' "$f" >/dev/null 2>&1 && return 0
+  done
+  return 1
+}
+
+# A title Claude Code reports (session_title) or the transcript ends with.
+# Unknown → the user renamed the session; stop touching it.
+check_foreign_title() {
+  local t="$1"
+  [[ -z "$t" ]] && return 0
+  state_has_title "$t" && return 0
+  pin_session "found foreign title '$t'"
+  return 1
+}
+
+# Delete session files nobody has touched in STATE_RETENTION_DAYS. Runs at
+# most once a day.
+maybe_cleanup_state() {
+  local marker="$STATE_DIR/.last-cleanup" now
+  now=$(date +%s)
+  if [[ -f "$marker" ]] && (( now - $(get_mtime "$marker") < 86400 )); then
+    return 0
+  fi
+  : > "$marker" 2>/dev/null || return 0
+  find "$STATE_DIR" -maxdepth 1 -type f \( -name '*.json' -o -name '*.pinned' \) \
+    -mtime +"$STATE_RETENTION_DAYS" -exec rm -f {} + 2>/dev/null || true
+  log "State cleanup ran"
+}
+
+# ── Global Cooldown ──
+# A usage limit applies to the whole account, so one session hitting it
+# pauses title generation everywhere.
+
+cooldown_active() {
+  [[ -f "$COOLDOWN_FILE" ]] || return 1
+  local until
+  read -r until < "$COOLDOWN_FILE" 2>/dev/null || return 1
+  [[ "$until" =~ ^[0-9]+$ ]] || return 1
+  (( $(date +%s) < until ))
+}
+
+set_cooldown() {
+  local secs="$1" reason="$2"
+  mkdir -p "$DATA_DIR" 2>/dev/null || true
+  echo $(( $(date +%s) + secs )) > "$COOLDOWN_FILE" 2>/dev/null || true
+  log "Cooldown ${secs}s: $reason"
 }
 
 # ── Locking (mkdir-based, cross-platform) ──
 
 LOCK_ACQUIRED=false
 
+# acquire_lock <dir> [wait_seconds]
 acquire_lock() {
-  local lock_dir="$1"
-  if mkdir "$lock_dir" 2>/dev/null; then
-    echo "$$" > "$lock_dir/pid"
-    LOCK_ACQUIRED=true
-    log "Lock acquired: $lock_dir"
-    return 0
-  fi
-  # Stale lock recovery: if lock is older than 60s, it's stale
-  # (hook timeout is 30s, so 2x is a safe margin)
-  local lock_age
-  lock_age=$(( $(date +%s) - $(get_mtime "$lock_dir") ))
-  if [[ "$lock_age" -gt 60 ]]; then
-    log "Stale lock detected (${lock_age}s old), removing: $lock_dir"
-    rm -rf "$lock_dir"
+  local lock_dir="$1" wait="${2-0}"
+  local deadline=$(( $(date +%s) + wait ))
+  while true; do
     if mkdir "$lock_dir" 2>/dev/null; then
       echo "$$" > "$lock_dir/pid"
       LOCK_ACQUIRED=true
-      log "Lock acquired after stale recovery: $lock_dir"
+      log "Lock acquired: $lock_dir"
       return 0
     fi
-  fi
+    local lock_age
+    lock_age=$(( $(date +%s) - $(get_mtime "$lock_dir") ))
+    if [[ "$lock_age" -gt "$LOCK_STALE_SECS" ]]; then
+      log "Stale lock (${lock_age}s), removing: $lock_dir"
+      rm -rf "$lock_dir"
+      continue
+    fi
+    (( $(date +%s) >= deadline )) && break
+    sleep 0.2
+  done
   log "Lock busy: $lock_dir"
   return 1
 }
@@ -188,81 +378,139 @@ release_lock() {
   fi
 }
 
-# ── Message Extraction ──
+# ── Transcript Reading ──
+# Transcripts can be tens of MB, so every reader narrows with grep before jq
+# parses anything, and parses line by line (`fromjson?`) so a half-written
+# last line can't fail the whole read.
 
-extract_user_messages() {
+# Shared jq definitions. `human_text` returns the text a person actually
+# typed for a transcript entry, or "" for everything else: tool results,
+# task notifications, subagent hand-backs, skill bodies, compact summaries,
+# local command output, harness wrappers. Slash commands become "/name args"
+# and are dropped when they carry no args.
+_HUMAN_JQ_DEFS='
+def _text:
+  if (.message.content | type) == "string" then .message.content
+  elif (.message.content | type) == "array" then
+    [.message.content[] | select(type == "object" and .type == "text") | (.text // "")] | join("\n")
+  else "" end;
+def _slash:
+  ([capture("<command-message>\\s*(?<m>[^<]*?)\\s*</command-message>")][0].m // "") as $m
+  | ([capture("<command-name>\\s*(?<n>[^<]*?)\\s*</command-name>")][0].n // (if $m != "" then "/" + $m else "" end)) as $n
+  | ([capture("<command-args>(?<a>[\\s\\S]*?)</command-args>")][0].a // "") as $a
+  | if ($n | length) > 0 and ($a | test("\\S")) then "\($n) \($a)" else "" end;
+def human_text:
+  if .type != "user" then ""
+  elif (.isMeta // false) or (.isCompactSummary // false) or (.isSidechain // false) then ""
+  elif (.origin | type) == "object" and .origin.kind != "human" then ""
+  else
+    _text
+    | gsub("<system-reminder>[\\s\\S]*?</system-reminder>"; "")
+    | if test("^\\s*<command-(name|message|args)>") then _slash
+      elif test("^\\s*(<(local-command-|bash-|task-notification|user-memory-input|agent-message)|\\[Request interrupted by user|This session is being continued from a previous conversation|(Stop|SubagentStop|PreToolUse|PostToolUse|UserPromptSubmit) hook (feedback|blocking error)|Another Claude session sent a message)") then ""
+      elif test("^\\s*/[A-Za-z0-9:_.-]+\\s*$") then ""
+      else . end
+    | gsub("\\[(Image|Pasted text) #[0-9]+[^\\]]*\\]"; "")
+    | gsub("\\s+"; " ") | sub("^ "; "") | sub(" $"; "")
+  end;
+# Keep head 2/3 and tail 1/3; the result is exactly $n long, so capping a
+# capped message again (fixture replay) leaves it unchanged.
+def cap($n):
+  if length > $n then
+    ((($n - 3) * 2 / 3) | floor) as $h
+    | .[0:$h] + " … " + .[(length - ($n - 3 - $h)):]
+  else . end;
+'
+
+# All human messages in the transcript, oldest first, as a compact JSON array.
+extract_human_messages() {
   local transcript="$1"
-  # UserPromptSubmit fires before the prompt lands in transcript, so callers
-  # pass it in to avoid a one-turn lag (and to have any content at all on the
-  # first prompt of a fresh session).
-  local current_prompt="${2:-}"
-  # Optional: a goal string to exclude from the sample so GOAL: and USER:
-  # lines don't duplicate the same content in the dialog.
-  local exclude="${3:-}"
-
-  local msgs=""
-
-  local all_user_lines
-  all_user_lines=$(jq -c 'select(.type == "user")' "$transcript" 2>/dev/null || true)
-
-  if [[ -n "$all_user_lines" ]]; then
-    # Sample: first N + last N, deduplicated preserving order
-    local first_lines last_lines selected
-    first_lines=$(echo "$all_user_lines" | head -"$HEAD_MESSAGES")
-    last_lines=$(echo "$all_user_lines" | tail -"$TAIL_MESSAGES")
-    selected=$(printf '%s\n%s' "$first_lines" "$last_lines" | awk '!seen[$0]++')
-
-    # Process each entry independently: strip <system-reminder> /
-    # <local-command-stdout|stderr> blocks (which the harness embeds into
-    # user content as multi-line regions), then flatten to a single line so
-    # one logical user message becomes exactly one USER: line in the dialog.
-    local entry flat
-    while IFS= read -r entry; do
-      [[ -z "$entry" ]] && continue
-      flat=$(printf '%s' "$entry" | jq -r '
-        if (.message.content | type) == "string" then
-          .message.content
-        elif (.message.content | type) == "array" then
-          ([.message.content[] | select(.type == "text") | .text] | join(" "))
-        else
-          empty
-        end
-      ' 2>/dev/null \
-        | sed -E '
-            /<system-reminder>/,/<\/system-reminder>/d
-            /<local-command-stdout>/,/<\/local-command-stdout>/d
-            /<local-command-stderr>/,/<\/local-command-stderr>/d
-          ' \
-        | grep -Ev '^<\/?(local-)?command-' \
-        | _flatten_oneline)
-      [[ -n "$flat" ]] && msgs=${msgs:+$msgs$'\n'}$flat
-    done <<< "$selected"
-  fi
-
-  if [[ -n "$current_prompt" ]]; then
-    local flat_prompt
-    flat_prompt=$(printf '%s' "$current_prompt" | _flatten_oneline)
-    if [[ -n "$flat_prompt" ]]; then
-      msgs=${msgs:+$msgs$'\n'}$flat_prompt
-    fi
-  fi
-
-  if [[ -n "$exclude" ]]; then
-    local flat_exclude
-    flat_exclude=$(printf '%s' "$exclude" | _flatten_oneline)
-    if [[ -n "$flat_exclude" ]]; then
-      msgs=$(printf '%s' "$msgs" | grep -vxF -- "$flat_exclude" || true)
-    fi
-  fi
-
-  msgs=$(printf '%s' "$msgs" | _cap_chars "$MAX_INPUT_CHARS" "")
-  [[ -z "$msgs" ]] && return 1
-  echo "$msgs"
+  [[ -f "$transcript" ]] || { echo '[]'; return 0; }
+  grep -F '"type":"user"' "$transcript" 2>/dev/null \
+    | grep -vF '"type":"tool_result"' \
+    | jq -n -R -c "${_HUMAN_JQ_DEFS}"' [inputs | fromjson? | human_text | select(length > 0)]' 2>/dev/null \
+    || echo '[]'
 }
 
+# Human text for one raw prompt string (UserPromptSubmit .prompt), using the
+# same rules as transcript entries. Empty when it isn't something a person
+# typed.
+prompt_human_text() {
+  jq -n -r --arg p "$1" "${_HUMAN_JQ_DEFS}"' {type:"user", message:{content:$p}} | human_text' 2>/dev/null
+}
+
+# Human text for a transcript entry (JSON on $1).
+entry_human_text() {
+  printf '%s' "$1" | jq -r "${_HUMAN_JQ_DEFS}"' human_text' 2>/dev/null
+}
+
+# only_acks_since <humans_json> <from_index>
+# True when every message from from_index on is a bare acknowledgement
+# ("ok", "继续", "yes go ahead"). Those never change what a session is
+# about, so no new title is needed — the model would only reword the old one.
+only_acks_since() {
+  printf '%s' "$1" | jq -e --argjson from "${2:-0}" '
+    def ack_words: ["ok","okay","okey","k","kk","yes","yep","yeah","yea","yup","y","sure",
+      "go","ahead","on","continue","keep","going","proceed","carry","do","it","please","pls",
+      "lgtm","sounds","good","great","cool","nice","perfect","fine","alright","thanks","thank",
+      "you","ty","next"];
+    def is_ack:
+      length > 0 and length <= 40
+      and (ascii_downcase
+        | gsub("(好的|好吧|好嘞|好|行|可以|继续|嗯|对的|对|是的|是|没问题|开始|吧|搞|冲|谢谢|收到|执行|确认|同意|はい|お願いします|続けて|네|계속)"; " ")
+        | gsub("[\\s.,!?;:~…。，！？、；：～()（）\"'"'"'`-]+"; " ")
+        | test("^[a-z ]*$") and (split(" ") | map(select(length > 0)) | all(. as $w | ack_words | index([$w]))));
+    (if type == "array" then .[$from:] else [] end) as $new
+    | ($new | length) > 0 and ($new | all(is_ack))' >/dev/null 2>&1
+}
+
+# The transcript entry for a UserPromptSubmit prompt, matched by prompt_id.
+# Prints nothing when it isn't there (yet).
+find_prompt_entry() {
+  local transcript="$1" prompt_id="$2"
+  [[ -n "$prompt_id" && -f "$transcript" ]] || return 0
+  grep -F "\"promptId\":\"$prompt_id\"" "$transcript" 2>/dev/null \
+    | grep -F '"type":"user"' \
+    | grep -vF '"type":"tool_result"' \
+    | jq -R -c --arg pid "$prompt_id" 'fromjson? | select(.type == "user" and .promptId == $pid)' 2>/dev/null \
+    | head -1
+}
+
+# Latest assistant text block, skipping the synthetic messages Claude Code
+# writes for API errors ("You've hit your session limit · resets …").
+extract_last_ai_text() {
+  local transcript="$1"
+  [[ -f "$transcript" ]] || return 0
+  grep -F '"type":"assistant"' "$transcript" 2>/dev/null \
+    | tail -n 200 \
+    | jq -n -R -r '
+        reduce (inputs | fromjson?
+          | select(.type == "assistant"
+              and ((.isApiErrorMessage // false) | not)
+              and (.error == null)
+              and ((.isSidechain // false) | not)
+              and ((.message.model // "") != "<synthetic>"))
+          | [.message.content[]? | select(type == "object" and .type == "text") | (.text // "") | select(test("\\S"))]
+          | select(length > 0) | .[-1]) as $t (""; $t)
+      ' 2>/dev/null
+}
+
+# Every custom-title value in the transcript, in order (one per line).
+list_custom_titles() {
+  local transcript="$1"
+  [[ -f "$transcript" ]] || return 0
+  grep -F '"type":"custom-title"' "$transcript" 2>/dev/null \
+    | jq -R -r 'fromjson? | select(.type == "custom-title") | (.customTitle // empty) | gsub("[\\r\\n]"; " ")' 2>/dev/null
+}
+
+last_custom_title() {
+  list_custom_titles "$1" | tail -1
+}
+
+# ── AI Context Cleanup ──
+
 # Collapse any whitespace (newlines, tabs, CR, runs of spaces) in stdin to
-# single spaces, trim leading/trailing space. Used to flatten multi-line
-# message text into one labeled line for the dialog feed (per design call D1).
+# single spaces, trim leading/trailing space.
 _flatten_oneline() {
   tr '\n\r\t' '   ' | tr -s ' ' | sed -e 's/^ //' -e 's/ $//'
 }
@@ -271,9 +519,7 @@ _flatten_oneline() {
 # "..." if omitted) when truncation occurs; pass an explicit empty string to
 # suppress the marker. Behaviour is identical on Linux bash 5 / macOS bash 3.2
 # and on GNU/BSD awk because the awk runs under LC_ALL=C in byte mode and
-# manually counts UTF-8 lead bytes (high bits != 10xxxxxx). Replaces the
-# locale-dependent `${var:0:N}` and byte-mode `head -c` previously used at
-# the 300-char and MAX_INPUT_CHARS caps.
+# manually counts UTF-8 lead bytes (high bits != 10xxxxxx).
 _cap_chars() {
   local max="$1" suffix="${2-...}"
   LC_ALL=C awk -v n="$max" -v suffix="$suffix" '
@@ -304,44 +550,6 @@ _cap_chars() {
   '
 }
 
-# Return the first substantive user-message text in the transcript, flattened
-# to a single line. Skips user entries whose content is only tool_result (no
-# text block). Drops `<system-reminder>...</system-reminder>` blocks (the
-# harness embeds these in user content). Returns empty when the transcript
-# has no user text at all.
-extract_goal_message() {
-  local transcript="$1"
-  jq -rs '
-    [.[] | select(.type == "user")
-          | if (.message.content | type) == "string" then
-              .message.content
-            elif (.message.content | type) == "array" then
-              ([.message.content[] | select(.type == "text") | .text] | join(" "))
-            else
-              empty
-            end
-          | select(. != null and . != "")]
-    | .[0] // empty
-  ' "$transcript" 2>/dev/null \
-    | sed '/<system-reminder>/,/<\/system-reminder>/d' \
-    | grep -Ev '^<(local-)?command-' \
-    | _flatten_oneline \
-    | _cap_chars "$MAX_INPUT_CHARS" ""
-}
-
-# ── AI Context Extraction ──
-
-# Return the raw text of the last assistant text block in the transcript.
-# No paragraph split, no truncation — sanitize_ai_text handles cleanup.
-# Empty when no assistant text exists.
-extract_last_ai_text() {
-  local transcript="$1"
-  jq -rs '
-    [.[] | select(.type == "assistant") | .message.content[]? | select(.type == "text") | .text]
-    | .[-1] // empty
-  ' "$transcript" 2>/dev/null
-}
-
 # Clean an AI text block so it's safe to feed as title-generation context.
 # Pipeline (see 2026-04-23-title-balance-design.md):
 #   1. Strip fenced code blocks
@@ -355,14 +563,14 @@ extract_last_ai_text() {
 # step 6 caps by UTF-8 character count via _cap_chars. The units intentionally
 # differ: the substance floor is "enough bytes to be meaningful" (30 bytes ≈
 # 10 CJK chars ≈ 30 ASCII chars), while the ceiling is "enough characters of
-# reading material for Haiku" regardless of encoding or platform bash version.
+# reading material for the model" regardless of encoding or bash version.
 sanitize_ai_text() {
   local raw="$1"
   [[ -z "$raw" ]] && return 0
   local cleaned
   # Step 1: strip fenced code blocks (whole fence including delimiters).
   # `tr -d '\r'` first so Windows-origin transcripts (CRLF line endings) get
-  # the same treatment as LF — keeps stray carriage returns out of STATE.
+  # the same treatment as LF.
   cleaned=$(printf '%s' "$raw" | tr -d '\r' | awk '
     /^[[:space:]]*```/ { in_fence = !in_fence; next }
     !in_fence
@@ -371,9 +579,8 @@ sanitize_ai_text() {
   cleaned=$(printf '%s' "$cleaned" | sed 's/`//g')
   # Step 3: strip pure-output / stack-frame lines, driven by the data
   # catalog at $SANITIZE_RULES_FILE. Each non-comment row contributes one
-  # /pattern/d to the sed script. Adding a new noise shape (Rust panic, Go
-  # stack, Ruby backtrace, etc.) is one TSV row, no code change. If the
-  # catalog is missing we skip step 3 entirely rather than fail the hook.
+  # /pattern/d to the sed script. If the catalog is missing we skip step 3
+  # entirely rather than fail the hook.
   if [[ -r "$SANITIZE_RULES_FILE" ]]; then
     local _sed_script="" _id _pattern _rest
     while IFS=$'\t' read -r _id _pattern _rest; do
@@ -397,51 +604,68 @@ sanitize_ai_text() {
   if [[ "$substance" -lt 30 ]]; then
     return 0
   fi
-  # Step 6: 300-char cap via _cap_chars (UTF-8 char count, not bytes; bash
-  # 3.2 / BSD-tools safe).
+  # Step 6: 300-char cap via _cap_chars (UTF-8 char count, not bytes)
   printf '%s' "$cleaned" | _cap_chars 300
 }
 
-# Compose a labeled dialog from GOAL (single line), USER messages (one per
-# line, blank lines dropped), and an optional STATE line. When a field is
-# empty, its label is omitted — no empty "STATE:" line, etc.
+# ── Dialog ──
+# build_dialog <current_title> <human_messages_json> <claude_text>
 #
-# Output shape:
-#   GOAL: ...
-#   USER: ...
-#   USER: ...
-#   STATE: ...
-format_dialog() {
-  local goal="$1" user_msgs="$2" state="$3"
+#   CURRENT_TITLE: the title the user sees now (omitted when none)
+#   FIRST: the first HEAD_MESSAGES human messages
+#   EARLIER: later human messages within the TAIL_MESSAGES window
+#   LATEST: the most recent human message (always present when any exist)
+#   CLAUDE: sanitized excerpt of Claude's latest reply (omitted when empty)
+#
+# Each message is flattened and capped on its own so one long paste can't
+# push the others out; long messages keep their head and tail.
+build_dialog() {
+  local current="$1" humans="${2:-[]}" claude_text="$3"
   local parts=()
-  if [[ -n "$goal" ]]; then
-    local flat_goal
-    flat_goal=$(printf '%s' "$goal" | _flatten_oneline)
-    [[ -n "$flat_goal" ]] && parts+=("GOAL: $flat_goal")
+  [[ -n "$current" ]] && parts+=("CURRENT_TITLE: $current")
+
+  local msgs
+  msgs=$(printf '%s' "$humans" | jq -r --argjson h "$HEAD_MESSAGES" --argjson t "$TAIL_MESSAGES" \
+    "${_HUMAN_JQ_DEFS}"'
+    (if type == "array" then . else [] end) | length as $n
+    | to_entries[]
+    | select(.key < $h or .key >= ($n - $t) or .key == ($n - 1))
+    | if .key == ($n - 1) then "LATEST: " + (.value | cap(600))
+      elif .key < $h then "FIRST: " + (.value | cap(500))
+      else "EARLIER: " + (.value | cap(300)) end
+  ' 2>/dev/null)
+  [[ -n "$msgs" ]] && parts+=("$msgs")
+
+  if [[ -n "$claude_text" ]]; then
+    local flat
+    flat=$(printf '%s' "$claude_text" | _flatten_oneline)
+    [[ -n "$flat" ]] && parts+=("CLAUDE: $flat")
   fi
-  if [[ -n "$user_msgs" ]]; then
-    local user_block
-    user_block=$(printf '%s' "$user_msgs" | awk 'NF { print "USER: " $0 }')
-    [[ -n "$user_block" ]] && parts+=("$user_block")
-  fi
-  if [[ -n "$state" ]]; then
-    local flat_state
-    flat_state=$(printf '%s' "$state" | _flatten_oneline)
-    [[ -n "$flat_state" ]] && parts+=("STATE: $flat_state")
-  fi
+
+  # A dialog without any human message has nothing to title.
+  [[ -n "$msgs" ]] || return 0
   local IFS=$'\n'
   printf '%s' "${parts[*]}"
 }
 
 # ── Title Generation ──
 
-generate_title() {
-  local user_msgs="$1"
-  local system_prompt='You are a title generator. Output ONLY the title. No other text.'
+# Text Claude Code (not the model) produces when a call fails. These must
+# never become a title even if a CLI version forgets to set is_error. Kept
+# narrow and anchored: a real title may well mention "rate limit".
+_CC_ERROR_RE='^(API Error:|You.ve hit your|You have hit your|You.ve reached your|Claude AI usage limit reached|Credit balance is too low|Invalid API key ·|Please run /login|OAuth token has expired|Not logged in ·)|limit · resets'
+# Only consulted once a call has failed: tells a quota stop from other errors.
+_QUOTA_RE='(usage|session|weekly|daily|monthly|5-hour|spend|rate)[ -]?limit|hit your .*limit|resets [0-9]|quota|overloaded|credit balance|billing|429|529'
+# Failures that mean the lean flag set itself is the problem (e.g. --safe-mode
+# skipping an auth helper), so the basic flag set should be used instead.
+_AUTH_RE='login|api key|auth|credential|oauth|token'
 
+TITLE_SYSTEM_PROMPT='You write short titles for Claude Code sessions. Reply with the title only.'
+
+_build_title_prompt() {
   local lang_instr
   if [[ "$LANGUAGE" == "auto" ]]; then
-    lang_instr="Write the title in the main language of the conversation."
+    lang_instr="Use the language the user writes in (FIRST, EARLIER, LATEST), even when CLAUDE or the code is in another language."
   else
     local lang_name
     case "$LANGUAGE" in
@@ -456,78 +680,213 @@ generate_title() {
     esac
     lang_instr="Write the title in ${lang_name}."
   fi
+  # Small models can't count columns, so two worked examples give the scale.
+  # fit_title catches the titles that still run over.
+  local target=$(( (MAX_LENGTH * 7 + 5) / 10 ))
 
-  local task_prompt="Generate a concrete title for the following Claude Code session.
+  TITLE_TASK_PROMPT="Write a title for the Claude Code session described in <dialog>.
 
-Budget: target roughly 70% of ${MAX_LENGTH} display columns (CJK=2, Latin=1). Don't exceed. Don't go overly terse.
+The user runs several sessions in parallel and reads this title in a status bar to tell them apart and to remember what each one is doing. The title must name what the session is working on now, specifically enough to recognize it at a glance.
 
-Labels:
-- GOAL: the session's original intent (first user message).
-- USER: later user messages in chronological order.
-- STATE: the assistant's latest substantive output (already sanitized, supplementary context only).
+Dialog fields (any may be absent):
+- CURRENT_TITLE: the title the user sees now.
+- FIRST: the user's first message, which started the session.
+- EARLIER: later user messages, oldest first.
+- LATEST: the user's most recent message.
+- CLAUDE: an excerpt of Claude's latest reply; it shows where the work stands.
 
-How to pick the topic:
-1. GOAL anchors the session's frame — what the session is fundamentally about.
-2. The LAST substantive USER message anchors the current focus — weight it most heavily when it's non-trivial.
-3. Earlier USER messages show how the conversation evolved; use them to disambiguate or refine.
-4. STATE is topic-source ONLY when the last USER is a short filler reply (ok, 好, continue, 嗯, go, yes, 行, sure, do it). Otherwise STATE is background context — do not derive the topic from it.
-5. Prefer SPECIFIC nouns/verbs (file names, function names, concrete actions) over abstract ones.
-6. Do NOT merge unrelated topics into a compound phrase.
-7. ${lang_instr}"
+How to decide:
+1. LATEST is the strongest signal of the current focus.
+2. If LATEST is a short reply (ok, yes, continue, 好, 继续, 可以) or only adjusts the previous request, the focus has not changed; use EARLIER, FIRST and CLAUDE to see what it is.
+3. FIRST explains terse follow-ups. If the user has moved on to a different task, name the new task only. Never join unrelated tasks into one title.
+4. Use CLAUDE as supporting context, never as the topic on its own.
+5. Name the concrete thing (feature, module, file, error, document) and what is being done to it. Avoid vague titles such as \"Bug fix\", \"Code review\", \"Optimization\", \"Discussion\".
 
-  log "Generating title: model=$MODEL language=$LANGUAGE"
+Stability: if CURRENT_TITLE still names the current work, output it exactly as it is. Change it only when the focus moved to another task or the kind of work changed (for example from research to implementation). Never output a mere rewording.
+
+Length: aim for about ${target} columns, never more than ${MAX_LENGTH}. Each letter, digit and space counts 1, each CJK character 2. For scale, \"Fix login redirect loop\" is 23 columns and \"优化首页加载速度\" is 16. Drop details rather than go over.
+Language: ${lang_instr}
+Output the title alone on one line: no quotes, no label, no trailing punctuation."
+}
+
+# _run_with_timeout <seconds> <stdin_file> <cmd...>
+# Run a command with a wall-clock limit. stdin is passed as a file because a
+# background job in a non-interactive shell otherwise reads /dev/null.
+_run_with_timeout() {
+  local secs="$1" infile="$2"; shift 2
+  "$@" < "$infile" &
+  local pid=$!
+  (
+    trap 'kill "$sp" 2>/dev/null; exit 0' TERM
+    sleep "$secs" & sp=$!
+    wait "$sp"
+    kill -TERM "$pid" 2>/dev/null
+  ) &
+  local watchdog=$!
+  local rc=0
+  wait "$pid" || rc=$?
+  kill -TERM "$watchdog" 2>/dev/null
+  wait "$watchdog" 2>/dev/null
+  return "$rc"
+}
+
+# _title_model_call <lean|basic> <prompt_file>
+# Prints the CLI's JSON output. "lean" strips tools, other plugins' hooks,
+# CLAUDE.md and MCP (~700 input tokens instead of ~25K) and asks for low
+# effort; "basic" is the 1.3 flag set for Claude Code versions that reject
+# the newer flags.
+_title_model_call() {
+  local mode="$1" prompt_file="$2"
+  local -a args=(-p --no-session-persistence --model "$MODEL"
+    --system-prompt "$TITLE_SYSTEM_PROMPT" --output-format json)
+  if [[ "$mode" == "lean" ]]; then
+    args+=(--tools "" --effort low --safe-mode)
+  fi
+  # CLAUDE_LIVE_TITLE_INTERNAL=1 is inherited by any hook the helper session
+  # runs, letting our own hooks skip it (basic mode still loads plugins).
+  (
+    export CLAUDE_LIVE_TITLE_INTERNAL=1
+    _run_with_timeout "$MODEL_TIMEOUT_SECS" "$prompt_file" claude "${args[@]}" 2>/dev/null
+  )
+}
+
+# _parse_model_output <json> → sets MODEL_STATUS (ok|error|quota|cli) and
+# MODEL_TEXT.
+_parse_model_output() {
+  local out="$1" parsed
+  MODEL_STATUS="cli"
+  MODEL_TEXT=""
+  parsed=$(printf '%s' "$out" | jq -r '
+    (if type == "array" then .[] else . end)
+    | select(type == "object" and .type == "result")
+    | [(.is_error // false | tostring), (.subtype // ""), (.result // "" | tostring)]
+    | join("\u001f")
+  ' 2>/dev/null | tail -1)
+  [[ -z "$parsed" ]] && return 0
+  local is_error subtype
+  IFS=$'\x1f' read -r is_error subtype MODEL_TEXT <<< "$(printf '%s' "$parsed" | tr '\n' ' ')"
+  if [[ "$is_error" == "true" || "$subtype" != "success" ]] \
+     || printf '%s' "$MODEL_TEXT" | grep -Eq "$_CC_ERROR_RE"; then
+    if printf '%s' "$MODEL_TEXT" | grep -Eiq "$_QUOTA_RE"; then
+      MODEL_STATUS="quota"
+    else
+      MODEL_STATUS="error"
+    fi
+    return 0
+  fi
+  MODEL_STATUS="ok"
+}
+
+# _ask_model <prompt>
+# One model call with the lean flags, falling back to the basic ones.
+# Sets MODEL_STATUS/MODEL_TEXT; returns 0 when the model answered. Failures
+# start a cooldown so a usage limit is not hit again and again.
+_ask_model() {
+  local prompt_file
+  prompt_file=$(mktemp "${TMPDIR:-/tmp}/claude-live-title-prompt.XXXXXX") || return 1
+  printf '%s' "$1" > "$prompt_file"
+  local -a modes=(lean basic)
+  if [[ -f "$LEAN_UNSUPPORTED_FILE" ]] \
+     && (( $(date +%s) - $(get_mtime "$LEAN_UNSUPPORTED_FILE") < LEAN_RETRY_SECS )); then
+    modes=(basic)
+  fi
+
+  log "Model call: model=$MODEL language=$LANGUAGE modes=${modes[*]}"
+  local mode out rc lean_blamed=false
+  MODEL_STATUS="cli"
+  for mode in "${modes[@]}"; do
+    rc=0
+    out=$(_title_model_call "$mode" "$prompt_file") || rc=$?
+    _parse_model_output "$out"
+    log "Model call ($mode): rc=$rc status=$MODEL_STATUS"
+    [[ "$MODEL_STATUS" == "ok" || "$MODEL_STATUS" == "quota" ]] && break
+    # Blame the lean flags only for CLI-level failures (unknown option, crash)
+    # or auth trouble; a transient API error says nothing about them.
+    if [[ "$mode" == "lean" ]] && { [[ "$MODEL_STATUS" == "cli" ]] \
+         || printf '%s' "$MODEL_TEXT" | grep -Eiq "$_AUTH_RE"; }; then
+      lean_blamed=true
+    fi
+  done
+  rm -f "$prompt_file"
+
+  case "$MODEL_STATUS" in
+    ok)
+      if [[ "$lean_blamed" == "true" ]]; then
+        : > "$LEAN_UNSUPPORTED_FILE" 2>/dev/null || true
+        log "Lean flags failed but basic worked; using basic for ${LEAN_RETRY_SECS}s"
+      fi
+      ;;
+    quota)
+      set_cooldown "$QUOTA_COOLDOWN_SECS" "usage limit: $MODEL_TEXT"
+      return 1
+      ;;
+    *)
+      set_cooldown "$ERROR_COOLDOWN_SECS" "model call failed ($MODEL_STATUS): ${MODEL_TEXT:0:120}"
+      return 1
+      ;;
+  esac
+
+  return 0
+}
+
+generate_title() {
+  local dialog="$1"
+  _build_title_prompt
 
   # Snapshot dry-run: print the rendered prompt + dialog to stdout and skip
   # the model call. Lets tests guard against accidental prompt drift via a
   # plain text diff against tests/snapshots/prompt.txt.
   if [[ -n "${CLAUDE_LIVE_TITLE_PRINT_DIALOG-}" ]]; then
     printf '<system-prompt>%s</system-prompt>\n<task>%s</task>\n<dialog>\n%s\n</dialog>' \
-      "$system_prompt" "$task_prompt" "$user_msgs"
+      "$TITLE_SYSTEM_PROMPT" "$TITLE_TASK_PROMPT" "$dialog"
     return 0
   fi
 
-  local title_raw
-  # CLAUDE_LIVE_TITLE_INTERNAL=1 is inherited by the hooks `claude -p` spawns,
-  # letting them detect and skip the subsession to avoid recursion + wasted calls.
-  title_raw=$(printf '<task>%s</task>\n<dialog>\n%s\n</dialog>' "$task_prompt" "$user_msgs" \
-    | CLAUDE_LIVE_TITLE_INTERNAL=1 claude -p --no-session-persistence --model "$MODEL" --system-prompt "$system_prompt" \
-        --output-format stream-json --verbose 2>/dev/null \
-    | jq -r 'select(.type == "assistant") | .message.content[]? | select(.type == "text") | .text' 2>/dev/null \
-    | tail -1 || true)
-
-  # Sanity check: multi-line or very long response means model is chatting, not titling
-  if [[ $(printf '%s' "$title_raw" | wc -l) -gt 2 ]] || [[ ${#title_raw} -gt 200 ]]; then
-    log "Title sanity check failed: lines=$(printf '%s' "$title_raw" | wc -l) len=${#title_raw}"
+  if cooldown_active; then
+    log "Cooldown active, skipping model call"
     return 1
   fi
 
+  _ask_model "$(printf '<task>%s</task>\n<dialog>\n%s\n</dialog>' "$TITLE_TASK_PROMPT" "$dialog")" || return 1
+
+  local title_raw
+  title_raw=$(printf '%s' "$MODEL_TEXT" | tr -d '\r')
+  # Sanity check: multi-line or very long response means the model is
+  # chatting, not titling.
+  local lines
+  lines=$(printf '%s\n' "$title_raw" | awk 'NF' | wc -l | tr -d ' ')
+  if [[ "$lines" -gt 2 ]] || [[ ${#title_raw} -gt 200 ]]; then
+    log "Title sanity check failed: lines=$lines len=${#title_raw}"
+    return 1
+  fi
   [[ -z "$title_raw" ]] && return 1
-  echo "$title_raw"
+  printf '%s\n' "$title_raw"
 }
 
 # ── Title Post-Processing ──
 
 clean_title() {
   local raw="$1"
-  # Strip prefixes, outer quotes, and trailing punctuation in a fixed-point
-  # loop so combined wrapping (e.g. `"Title: Fix."` or `标题：「修复」。`) gets
-  # peeled fully — single-pass would only remove the outermost layer.
-  # Length is controlled upstream by the AI prompt + generate_title sanity
-  # check (200 chars), so no hard truncation here.
+  # Strip prefixes, markdown, outer quotes, and trailing punctuation in a
+  # fixed-point loop so combined wrapping (e.g. `"Title: Fix."` or
+  # `标题：「修复」。`) gets peeled fully — single-pass would only remove the
+  # outermost layer. Length is handled by fit_title, never by truncation.
   local cleaned prev
-  cleaned=$(printf '%s' "$raw" | tr -d '\n')
+  cleaned=$(printf '%s' "$raw" | tr '\n\r' '  ')
   while true; do
     prev="$cleaned"
     cleaned=$(printf '%s' "$cleaned" | sed -E '
       s/^[[:space:]]+//
+      s/^#+[[:space:]]*//
+      s/^\*\*(.*)\*\*$/\1/
       s/^[Tt]itle[：:][[:space:]]*//
       s/^[Ss]ession [Tt]itle[：:][[:space:]]*//
       s/^标题[：:][[:space:]]*//
       s/^会话标题[：:][[:space:]]*//
       s/^タイトル[：:][[:space:]]*//
       s/^제목[：:][[:space:]]*//
-      s/^["'"'"'「《]//
-      s/["'"'"'」》]$//
+      s/^["'"'"'「《“]//
+      s/["'"'"'」》”]$//
       s/[。！？，、；：.!?,;:]+$//
       s/[[:space:]]+$//
     ')
@@ -536,20 +895,105 @@ clean_title() {
   printf '%s' "$cleaned"
 }
 
+# display_width <text>
+# Columns a terminal status bar uses: East Asian wide characters (CJK,
+# Hangul, fullwidth forms, most emoji) take 2, everything else 1.
+display_width() {
+  printf '%s' "$1" | jq -Rrs '[explode[]
+    | if (. >= 4352 and . <= 4447) or (. >= 11904 and . <= 42191)
+         or (. >= 44032 and . <= 55203) or (. >= 63744 and . <= 64255)
+         or (. >= 65072 and . <= 65103) or (. >= 65280 and . <= 65376)
+         or (. >= 65504 and . <= 65510) or (. >= 127744 and . <= 129791)
+         or (. >= 131072 and . <= 262141)
+      then 2 else 1 end] | add // 0' 2>/dev/null || printf '%s' "${#1}"
+}
+
+# fit_title <title>
+# The prompt asks for MAX_LENGTH columns, but small models often run a few
+# columns over. When that happens, ask once more for a shorter version of
+# the same title; keep whichever result fits best. Cutting the string
+# instead would leave titles ending mid-phrase.
+fit_title() {
+  local title="$1" width
+  width=$(display_width "$title")
+  if (( width <= MAX_LENGTH )) || [[ -n "${CLAUDE_LIVE_TITLE_PRINT_DIALOG-}" ]] || cooldown_active; then
+    printf '%s' "$title"
+    return 0
+  fi
+  log "Title is $width columns (limit $MAX_LENGTH), asking for a shorter one"
+  local short short_width
+  if _ask_model "<task>This title for a Claude Code session is ${width} columns, but the status bar fits ${MAX_LENGTH}. Shorten it to at most ${MAX_LENGTH} columns (a CJK character counts as 2, any other character as 1). Keep the words that identify the work and keep its language. Output the title alone on one line.</task>
+<title>${title}</title>"; then
+    short=$(clean_title "$(printf '%s' "$MODEL_TEXT" | head -1)")
+    short_width=$(display_width "$short")
+    if [[ -n "$short" ]] && (( short_width < width )); then
+      log "Shortened to $short_width columns: '$short'"
+      printf '%s' "$short"
+      return 0
+    fi
+  fi
+  printf '%s' "$title"
+}
+
 # ── Write Title to Transcript ──
+# Appending a custom-title record is what the HUD and /resume read. Claude
+# Code re-appends its own in-memory title after each API request once it has
+# one; apply-title.sh keeps that in-memory title in sync.
 
 write_title() {
   local transcript="$1"
   local title="$2"
   local session_id="$3"
+  [[ -f "$transcript" ]] || return 1
 
   get_file_times "$transcript"
-
   local record
   record=$(jq -nc --arg title "$title" --arg sid "$session_id" \
     '{type: "custom-title", customTitle: $title, sessionId: $sid}')
   echo "$record" >> "$transcript"
-
   restore_file_times "$transcript"
   log "Title written: '$title'"
+}
+
+# ── Generate + Deliver ──
+# title_update <transcript> <session_id> <humans_json> <trigger>
+# Caller holds the session lock and has run state_load.
+title_update() {
+  local transcript="$1" session_id="$2" humans="$3" trigger="$4"
+  local human_count
+  human_count=$(printf '%s' "$humans" | jq 'length' 2>/dev/null || echo 0)
+  [[ "$human_count" =~ ^[0-9]+$ ]] || human_count=0
+
+  local ai_text dialog
+  ai_text=$(sanitize_ai_text "$(extract_last_ai_text "$transcript")")
+  dialog=$(build_dialog "$ST_LATEST" "$humans" "$ai_text")
+  [[ -z "$dialog" ]] && { log "Empty dialog, skipping"; return 0; }
+
+  local title_raw title
+  title_raw=$(generate_title "$dialog") || { log "Title generation failed"; return 0; }
+  title=$(clean_title "$title_raw")
+  [[ -z "$title" ]] && { log "Title empty after cleanup"; return 0; }
+  title=$(fit_title "$title")
+
+  local now
+  now=$(date +%s)
+  # The user may have renamed the session while the model was running.
+  if ! check_foreign_title "$(last_custom_title "$transcript")"; then
+    return 0
+  fi
+
+  # State first: once the record is in the transcript Claude Code may adopt
+  # it, and apply-title.sh must already know it as ours.
+  local previous="$ST_LATEST"
+  state_save "$title" "$now" "$human_count"
+  if [[ "$title" == "$previous" ]]; then
+    log "Title unchanged: '$title' ($trigger)"
+    [[ "$(last_custom_title "$transcript")" == "$title" ]] || write_title "$transcript" "$title" "$session_id"
+  else
+    write_title "$transcript" "$title" "$session_id"
+  fi
+  ST_LATEST="$title"
+  ST_LAST_GEN="$now"
+  ST_LAST_HUMAN="$human_count"
+  log_replay_event "$dialog" "$title" "$session_id" "$trigger"
 }

@@ -1,0 +1,7 @@
+# Claude ran into the usage limit mid-task. The limit notice is a synthetic
+# assistant message; it must never reach the dialog or become the title.
+must_contain_any: ["checkout", "Checkout"]
+must_not_contain: ["hit your", "resets", "session limit"]
+title_must_not_contain: []
+max_display_columns: 30
+keep_current_title: true

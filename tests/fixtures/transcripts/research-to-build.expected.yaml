@@ -1,0 +1,6 @@
+# Same topic, but the kind of work changed from research to implementation;
+# the title should say so instead of keeping "Research ...".
+must_contain_any: ["merge", "Merge", "last-write", "Last-write", "LWW", "mplement"]
+must_not_contain: []
+title_must_not_contain: ["Research", "research"]
+max_display_columns: 30

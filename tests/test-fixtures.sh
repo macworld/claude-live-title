@@ -6,14 +6,21 @@
 # Lint mode checks (always):
 #   - .jsonl parses as JSONL
 #   - matching .expected.yaml exists
-#   - extract_goal + extract_user + sanitize + format_dialog produces a
+#   - the hooks' pipeline (human messages + last custom-title as the
+#     current title + sanitized Claude reply → build_dialog) produces a
 #     non-empty dialog
 #   - must_not_contain strings do not appear in the dialog
 #
 # Live mode adds (when RUN_LIVE=1):
 #   - generate_title (real model) + clean_title produce a non-empty title
 #   - must_contain_any: at least one needle is in the title
-#   - must_not_contain: no needle is in the title
+#   - must_not_contain, title_must_not_contain: no needle is in the title
+#   - max_display_columns: title width (CJK = 2) stays within it
+#   - keep_current_title: true → the title equals the fixture's last
+#     custom-title (stability)
+#
+# Config is pinned to the defaults so results don't depend on the local
+# config file.
 set -eu
 
 PASS=0
@@ -30,9 +37,11 @@ report() {
 }
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+TMP=$(mktemp -d)
+trap 'rm -rf "$TMP"' EXIT
+export CLAUDE_PLUGIN_DATA="$TMP/data"
 source "$REPO/hooks/lib/common.sh"
 detect_platform
-load_config
 
 FIX_DIR="$REPO/tests/fixtures/transcripts"
 
@@ -59,6 +68,10 @@ read_yaml_array() {
   else
     printf '%s' "$raw"
   fi
+}
+
+read_yaml_scalar() {
+  grep "^$2:" "$1" 2>/dev/null | sed "s/^$2:[[:space:]]*//" | head -1 || true
 }
 
 assert_no_needles_in() {
@@ -90,11 +103,10 @@ for tx in "${FIXTURES[@]}"; do
   fi
   report PASS "$name: fixture files present"
 
-  GOAL=$(extract_goal_message "$tx")
-  USERS=$(extract_user_messages "$tx" "" "$GOAL" || true)
-  AI_RAW=$(extract_last_ai_text "$tx")
-  AI=$(sanitize_ai_text "$AI_RAW")
-  DIALOG=$(format_dialog "$GOAL" "$USERS" "$AI")
+  CURRENT=$(last_custom_title "$tx")
+  HUMANS=$(extract_human_messages "$tx")
+  AI=$(sanitize_ai_text "$(extract_last_ai_text "$tx")")
+  DIALOG=$(build_dialog "$CURRENT" "$HUMANS" "$AI")
 
   if [[ -z "$DIALOG" ]]; then
     report FAIL "$name: dialog empty after pipeline"
@@ -108,6 +120,7 @@ for tx in "${FIXTURES[@]}"; do
   if [[ -n "${RUN_LIVE-}" ]]; then
     TITLE_RAW=$(generate_title "$DIALOG" 2>/dev/null || true)
     TITLE=$(clean_title "$TITLE_RAW")
+    [[ -n "$TITLE" ]] && TITLE=$(fit_title "$TITLE")
     if [[ -z "$TITLE" ]]; then
       report FAIL "$name [live]: empty title from model"
       continue
@@ -129,6 +142,25 @@ for tx in "${FIXTURES[@]}"; do
     fi
 
     assert_no_needles_in "$name title" "$TITLE" "$must_not"
+    assert_no_needles_in "$name title" "$TITLE" "$(read_yaml_array "$exp" title_must_not_contain)"
+
+    max_cols=$(read_yaml_scalar "$exp" max_display_columns)
+    if [[ "$max_cols" =~ ^[0-9]+$ ]]; then
+      width=$(display_width "$TITLE")
+      if (( width <= max_cols )); then
+        report PASS "$name [live]: width $width ≤ $max_cols"
+      else
+        report FAIL "$name [live]: width $width > $max_cols"
+      fi
+    fi
+
+    if [[ "$(read_yaml_scalar "$exp" keep_current_title)" == "true" ]]; then
+      if [[ "$TITLE" == "$CURRENT" ]]; then
+        report PASS "$name [live]: current title kept"
+      else
+        report FAIL "$name [live]: '$CURRENT' was reworded to '$TITLE'"
+      fi
+    fi
   fi
 done
 

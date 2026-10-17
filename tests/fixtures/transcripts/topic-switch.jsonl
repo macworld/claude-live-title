@@ -1,0 +1,13 @@
+{"type":"user","origin":{"kind":"human"},"promptSource":"typed","message":{"role":"user","content":"set up GitHub Actions CI for the iOS app"}}
+{"type":"assistant","message":{"model":"claude-opus-5-5","content":[{"type":"text","text":"Added .github/workflows/ios.yml with a macOS runner and xcodebuild test."}]}}
+{"type":"user","origin":{"kind":"human"},"promptSource":"typed","message":{"role":"user","content":"signing fails on the runner, use fastlane match"}}
+{"type":"assistant","message":{"model":"claude-opus-5-5","content":[{"type":"text","text":"Configured fastlane match with the MATCH_PASSWORD secret."}]}}
+{"type":"custom-title","customTitle":"Set up iOS CI"}
+{"type":"user","origin":{"kind":"human"},"promptSource":"typed","message":{"role":"user","content":"cache the SwiftPM packages too"}}
+{"type":"assistant","message":{"model":"claude-opus-5-5","content":[{"type":"text","text":"Added actions/cache for ~/Library/Developer/Xcode/DerivedData and .build."}]}}
+{"type":"user","origin":{"kind":"human"},"promptSource":"typed","message":{"role":"user","content":"CI is green now. next: the onboarding screen copy is too long, let's rework it"}}
+{"type":"assistant","message":{"model":"claude-opus-5-5","content":[{"type":"text","text":"Here are three shorter options for the onboarding headline."}]}}
+{"type":"user","origin":{"kind":"human"},"promptSource":"typed","message":{"role":"user","content":"make the headline under 40 characters"}}
+{"type":"assistant","message":{"model":"claude-opus-5-5","content":[{"type":"text","text":"Headline: Plan trips anywhere, even offline."}]}}
+{"type":"user","origin":{"kind":"human"},"promptSource":"typed","message":{"role":"user","content":"and the subtitle should mention offline maps"}}
+{"type":"assistant","message":{"model":"claude-opus-5-5","content":[{"type":"text","text":"Updated OnboardingView.swift: subtitle now reads 'Download maps and keep exploring without signal.'"}]}}

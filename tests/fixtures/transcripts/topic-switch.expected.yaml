@@ -1,0 +1,6 @@
+# A long session that moved from CI setup to onboarding copy. The title
+# must follow the current work, not the first message.
+must_contain_any: ["onboarding", "Onboarding"]
+must_not_contain: []
+title_must_not_contain: ["CI", "fastlane", "GitHub"]
+max_display_columns: 30

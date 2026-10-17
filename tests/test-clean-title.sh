@@ -67,10 +67,42 @@ echo "=== clean_title whitespace and combos ==="
 
 assert_clean "leading whitespace"        '   leading spaces'               'leading spaces'
 assert_clean "trailing whitespace"       'trailing spaces   '              'trailing spaces'
-assert_clean "newlines collapsed"        $'multi\nline\ntitle'             'multilinetitle'
+assert_clean "newlines become spaces"    $'multi\nline\ntitle'             'multi line title'
+assert_clean "trailing newline dropped"  $'Fix login\n'                    'Fix login'
 assert_clean "Title: + punct + quotes"   '"Title: Fix bug."'               'Fix bug'
 assert_clean "标题: + 「」 + 。"          '标题：「修登录」。'                  '修登录'
 assert_clean "no transformation needed"  '修复 logout 流程'                  '修复 logout 流程'
+
+echo ""
+echo "=== clean_title markdown wrapping ==="
+
+assert_clean "markdown heading"          '# Fix login'                     'Fix login'
+assert_clean "markdown h2 + quotes"      '## "Fix login"'                  'Fix login'
+assert_clean "bold wrapping"             '**修复登录**'                      '修复登录'
+assert_clean "curly quotes"              '“Fix login”'                     'Fix login'
+assert_clean "bold + Title: + 。"         '**Title: 修复登录。**'              '修复登录'
+
+echo ""
+echo "=== display_width ==="
+
+assert_width() {
+  local desc="$1" input="$2" expected="$3" actual
+  actual=$(display_width "$input")
+  if [[ "$actual" == "$expected" ]]; then
+    report PASS "$desc"
+  else
+    report FAIL "$desc — input=[$input] expected=$expected got=$actual"
+  fi
+}
+assert_width "ASCII"                   'Fix flaky checkout test'   23
+assert_width "Chinese = 2 each"        '优化后台总览页布局'          18
+assert_width "mixed"                   '修复 logout 流程'           16
+assert_width "Japanese kana"           'ログイン修正'                12
+assert_width "Hangul + space"          '한국어 제목'                 11
+assert_width "fullwidth letters"       'ｆｕｌｌ'                    8
+assert_width "accented Latin = 1"      'Café menü'                 9
+assert_width "emoji = 2"               '🚀 ship it'                 10
+assert_width "empty"                   ''                          0
 
 echo ""
 echo "================================"

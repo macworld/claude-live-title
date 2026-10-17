@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
-# test-extract.sh — Verify extract_last_ai_text and format_dialog
+# test-extract.sh — transcript readers and dialog assembly:
+# extract_human_messages / prompt_human_text / find_prompt_entry /
+# extract_last_ai_text / list_custom_titles / build_dialog.
+# Fixture lines mirror the entry shapes Claude Code actually writes.
 set -eu
 
 PASS=0
@@ -16,315 +19,167 @@ report() {
 }
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+TMP=$(mktemp -d)
+trap 'rm -rf "$TMP"' EXIT
+export HOME="$TMP/home" CLAUDE_PLUGIN_DATA="$TMP/data"
 source "$SCRIPT_DIR/hooks/lib/common.sh"
 detect_platform
 
-make_transcript() {
-  local path
-  path="/tmp/test-extract-$$-$RANDOM.jsonl"
-  printf '%s' "$1" > "$path"
-  echo "$path"
+check() {
+  local desc="$1" expected="$2" actual="$3"
+  if [[ "$actual" == "$expected" ]]; then
+    report PASS "$desc"
+  else
+    report FAIL "$desc — expected [$expected] got [$actual]"
+  fi
 }
 
+# ── A transcript with one of every entry kind seen in the wild ──
+TX="$TMP/mixed.jsonl"
+{
+  # typed by a person (interactive, current CC)
+  echo '{"type":"user","origin":{"kind":"human"},"promptSource":"typed","promptId":"p1","message":{"role":"user","content":"fix the login redirect loop"}}'
+  # skill body injected after a slash command
+  echo '{"type":"user","isMeta":true,"message":{"role":"user","content":[{"type":"text","text":"Base directory for this skill: /x/skills/brainstorming\n# Brainstorming"}]}}'
+  # tool result
+  echo '{"type":"user","promptId":"p1","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"ok"}]}}'
+  # background task notification
+  echo '{"type":"user","origin":{"kind":"task-notification","producer":"session-task"},"promptSource":"system","message":{"role":"user","content":"<task-notification> <summary>Background work done</summary> </task-notification>"}}'
+  # subagent hand-back
+  echo '{"type":"user","isMeta":true,"origin":{"kind":"peer"},"promptSource":"system","message":{"role":"user","content":"Another Claude session sent a message: <agent-message from=\"a1\">report</agent-message>"}}'
+  # /compact and its output
+  echo '{"type":"user","message":{"role":"user","content":"<command-name>/compact</command-name>\n            <command-message>compact</command-message>\n            <command-args></command-args>"}}'
+  echo '{"type":"user","message":{"role":"user","content":"<local-command-stdout>Compacted</local-command-stdout>"}}'
+  echo '{"type":"user","isCompactSummary":true,"message":{"role":"user","content":"This session is being continued from a previous conversation that ran out of context."}}'
+  # caveat (meta) and interruption
+  echo '{"type":"user","isMeta":true,"message":{"role":"user","content":"<local-command-caveat>Caveat: ...</local-command-caveat>"}}'
+  echo '{"type":"user","message":{"role":"user","content":[{"type":"text","text":"[Request interrupted by user]"}]}}'
+  # slash command with args
+  echo '{"type":"user","message":{"role":"user","content":"<command-name>/goal</command-name>\n<command-message>goal</command-message>\n<command-args>ship the admin dashboard</command-args>"}}'
+  # older CC: no origin field, plain text, multi-line with a system reminder
+  echo '{"type":"user","message":{"role":"user","content":[{"type":"text","text":"now   look at\nthe logout flow <system-reminder>\nnoise\n</system-reminder>[Image #1]"}]}}'
+  # sidechain entry (subagent) and an auto-continuation
+  echo '{"type":"user","isSidechain":true,"message":{"role":"user","content":"subagent prompt"}}'
+  echo '{"type":"user","isMeta":true,"origin":{"kind":"auto-continuation"},"message":{"role":"user","content":"continue"}}'
+  # hook feedback injected by CC
+  echo '{"type":"user","message":{"role":"user","content":"Stop hook feedback:\nkeep going"}}'
+  # bare slash command typed without args
+  echo '{"type":"user","origin":{"kind":"human"},"message":{"role":"user","content":"/clear"}}'
+  # accepted suggestion and queued message are still the person
+  echo '{"type":"user","origin":{"kind":"human"},"promptSource":"suggestion_accepted","message":{"role":"user","content":"run the tests"}}'
+  echo '{"type":"user","origin":{"kind":"human"},"promptSource":"queued","promptId":"p9","message":{"role":"user","content":"then commit"}}'
+  # assistant replies, last real one followed by a synthetic usage-limit message
+  echo '{"type":"assistant","message":{"model":"claude-opus-5-5","content":[{"type":"text","text":"Fixed the redirect loop in auth/session.ts by clearing the stale cookie."}]}}'
+  echo '{"type":"assistant","isApiErrorMessage":true,"error":"rate_limit","message":{"model":"<synthetic>","content":[{"type":"text","text":"You'"'"'ve hit your session limit · resets 3:20am"}]}}'
+  echo '{"type":"custom-title","customTitle":"Fix login redirect","sessionId":"s"}'
+  echo '{"type":"custom-title","customTitle":"Fix logout flow","sessionId":"s"}'
+  # a user message quoting a custom-title record must not count as one
+  echo '{"type":"user","origin":{"kind":"human"},"message":{"role":"user","content":"why is {\"type\":\"custom-title\"} in my file"}}'
+} > "$TX"
+
+echo "=== extract_human_messages ==="
+
+H=$(extract_human_messages "$TX")
+check "keeps only what a person typed, in order" \
+  '["fix the login redirect loop","/goal ship the admin dashboard","now look at the logout flow","run the tests","then commit","why is {\"type\":\"custom-title\"} in my file"]' "$H"
+check "missing transcript → []" "[]" "$(extract_human_messages "$TMP/nope.jsonl")"
+
+# A half-written last line (CC mid-append) must not discard the rest.
+cp "$TX" "$TMP/partial.jsonl"
+printf '%s' '{"type":"user","origin":{"kind":"human"},"message":{"content":"trunc' >> "$TMP/partial.jsonl"
+check "truncated last line ignored" "6" "$(extract_human_messages "$TMP/partial.jsonl" | jq length)"
+
+echo ""
+echo "=== prompt_human_text (raw UserPromptSubmit .prompt) ==="
+
+check "plain prompt kept"             "fix it now"            "$(prompt_human_text $'fix it\n  now')"
+check "task notification dropped"     ""                      "$(prompt_human_text '<task-notification><summary>x</summary></task-notification>')"
+check "peer message dropped"          ""                      "$(prompt_human_text 'Another Claude session sent a message: hi')"
+check "bare slash command dropped"    ""                      "$(prompt_human_text '/compact')"
+check "slash command with args kept"  "/review the auth module" "$(prompt_human_text '/review the auth module')"
+check "system reminder stripped"      "hello"                 "$(prompt_human_text 'hello <system-reminder>x</system-reminder>')"
+
+echo ""
+echo "=== find_prompt_entry / entry_human_text ==="
+
+E=$(find_prompt_entry "$TX" "p1")
+check "finds the prompt entry, not its tool results" "fix the login redirect loop" "$(entry_human_text "$E")"
+check "unknown prompt id → nothing" "" "$(find_prompt_entry "$TX" "nope")"
+check "empty prompt id → nothing" "" "$(find_prompt_entry "$TX" "")"
+TN='{"type":"user","origin":{"kind":"task-notification"},"promptId":"p5","message":{"content":"looks like a real sentence"}}'
+check "origin decides even when the text looks human" "" "$(entry_human_text "$TN")"
+
+echo ""
+echo "=== only_acks_since ==="
+
+ack() { only_acks_since "$(jq -nc --arg m "$1" '["first", $m]')" 1 && echo ack || echo real; }
+for m in "ok" "OK!" "继续" "好的，继续" "yes please" "ok continue" "go ahead" "嗯嗯" "lgtm" "keep going" "y" "はい"; do
+  check "ack: $m" "ack" "$(ack "$m")"
+done
+for m in "fix it" "ok now do the signup page" "这是什么" "好的，顺便把测试也补上" "continue with the auth module" "next: onboarding" "修复"; do
+  check "real: $m" "real" "$(ack "$m")"
+done
+only_acks_since '["a","ok","new request"]' 1 && R=ack || R=real
+check "an ack followed by a request is real" "real" "$R"
+only_acks_since '["a"]' 1 && R=ack || R=real
+check "nothing new is not an ack" "real" "$R"
+
+echo ""
 echo "=== extract_last_ai_text ==="
 
-# Empty transcript
-T=$(make_transcript "")
-R=$(extract_last_ai_text "$T")
-[[ -z "$R" ]] && report PASS "empty transcript → empty" || report FAIL "empty got '$R'"
-rm -f "$T"
-
-# Only user entries
-T=$(make_transcript '{"type":"user","message":{"content":"hi"}}
-')
-R=$(extract_last_ai_text "$T")
-[[ -z "$R" ]] && report PASS "user-only → empty" || report FAIL "user-only got '$R'"
-rm -f "$T"
-
-# Single assistant with one text block
-T=$(make_transcript '{"type":"assistant","message":{"content":[{"type":"text","text":"hello world"}]}}
-')
-R=$(extract_last_ai_text "$T")
-[[ "$R" == "hello world" ]] && report PASS "single AI text" || report FAIL "got '$R'"
-rm -f "$T"
-
-# Multiple assistants, last has text+tool_use; expect last text
-T=$(make_transcript '{"type":"assistant","message":{"content":[{"type":"text","text":"first"}]}}
-{"type":"assistant","message":{"content":[{"type":"text","text":"second"},{"type":"tool_use","name":"X","id":"a","input":{}}]}}
-')
-R=$(extract_last_ai_text "$T")
-[[ "$R" == "second" ]] && report PASS "multi-assistant last text wins" || report FAIL "got '$R'"
-rm -f "$T"
-
-# Text > 300 chars → returned as-is (no truncation at this layer)
-LONG=$(python3 -c 'print("a" * 350)')
-LINE=$(jq -nc --arg t "$LONG" '{type:"assistant",message:{content:[{type:"text",text:$t}]}}')
-T=$(make_transcript "$LINE
-")
-R=$(extract_last_ai_text "$T")
-if [[ ${#R} -eq 350 ]]; then
-  report PASS "long text returned raw (no truncation)"
-else
-  report FAIL "got length ${#R}, expected 350"
-fi
-rm -f "$T"
-
-# Multi-paragraph → returned as-is (no paragraph split at this layer)
-T=$(make_transcript '{"type":"assistant","message":{"content":[{"type":"text","text":"intent here.\n\nDetail paragraph."}]}}
-')
-R=$(extract_last_ai_text "$T")
-EXPECTED=$'intent here.\n\nDetail paragraph.'
-[[ "$R" == "$EXPECTED" ]] && report PASS "multi-paragraph returned raw" || report FAIL "got '$R'"
-rm -f "$T"
-
-# Last assistant has only tool_use; earlier has text → falls back to earlier
-T=$(make_transcript '{"type":"assistant","message":{"content":[{"type":"text","text":"earlier text"}]}}
-{"type":"assistant","message":{"content":[{"type":"tool_use","name":"X","id":"a","input":{}}]}}
-')
-R=$(extract_last_ai_text "$T")
-[[ "$R" == "earlier text" ]] && report PASS "tool-only last → falls back" || report FAIL "got '$R'"
-rm -f "$T"
+check "skips synthetic usage-limit message" \
+  "Fixed the redirect loop in auth/session.ts by clearing the stale cookie." "$(extract_last_ai_text "$TX")"
+AI="$TMP/ai.jsonl"
+{
+  echo '{"type":"assistant","message":{"content":[{"type":"text","text":"first"}]}}'
+  echo '{"type":"assistant","message":{"content":[{"type":"text","text":"second"},{"type":"tool_use","name":"X","id":"a","input":{}}]}}'
+  echo '{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Y","id":"b","input":{}}]}}'
+  echo '{"type":"assistant","isSidechain":true,"message":{"content":[{"type":"text","text":"subagent"}]}}'
+} > "$AI"
+check "last text block wins, tool-only and sidechain skipped" "second" "$(extract_last_ai_text "$AI")"
+echo '{"type":"user","message":{"content":"hi"}}' > "$TMP/u.jsonl"
+check "no assistant → empty" "" "$(extract_last_ai_text "$TMP/u.jsonl")"
 
 echo ""
-echo "=== extract_goal_message ==="
+echo "=== custom titles ==="
 
-# Goal normal case — first user message
-T=$(make_transcript '{"type":"user","message":{"content":"帮我修登录 bug"}}
-{"type":"assistant","message":{"content":[{"type":"text","text":"好的"}]}}
-{"type":"user","message":{"content":"用 redis 还是 memory"}}
-')
-R=$(extract_goal_message "$T")
-[[ "$R" == "帮我修登录 bug" ]] && report PASS "goal = first user message" || report FAIL "got '$R'"
-rm -f "$T"
-
-# No user messages → empty
-T=$(make_transcript '{"type":"assistant","message":{"content":[{"type":"text","text":"only AI"}]}}
-')
-R=$(extract_goal_message "$T")
-[[ -z "$R" ]] && report PASS "no user entries → empty" || report FAIL "got '$R'"
-rm -f "$T"
-
-# First user entry is a tool_result (type:user with content[0].type:tool_result) → skip to next real user text
-T=$(make_transcript '{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t1","content":"output"}]}}
-{"type":"user","message":{"content":"实际的第一条用户消息"}}
-')
-R=$(extract_goal_message "$T")
-[[ "$R" == "实际的第一条用户消息" ]] && report PASS "tool_result skipped, next user text wins" || report FAIL "got '$R'"
-rm -f "$T"
-
-# Content as array with text block → extract text
-T=$(make_transcript '{"type":"user","message":{"content":[{"type":"text","text":"数组形式的第一条"}]}}
-')
-R=$(extract_goal_message "$T")
-[[ "$R" == "数组形式的第一条" ]] && report PASS "array content with text extracted" || report FAIL "got '$R'"
-rm -f "$T"
-
-# Multi-line first user message → flattened to a single line, all content preserved
-T=$(make_transcript '{"type":"user","message":{"content":"帮我修\n登录 bug"}}
-{"type":"user","message":{"content":"第二条"}}
-')
-R=$(extract_goal_message "$T")
-[[ "$R" == "帮我修 登录 bug" ]] && report PASS "multi-line goal flattened to single line" || report FAIL "got '$R'"
-rm -f "$T"
-
-# Multi-line goal with a fenced block → fence text preserved verbatim (sanitize is not goal's job)
-T=$(make_transcript '{"type":"user","message":{"content":"帮我看这段\n```python\nx=1\n```\n出错了"}}
-')
-R=$(extract_goal_message "$T")
-if [[ "$R" == *"帮我看这段"* && "$R" == *'```python'* && "$R" == *"x=1"* && "$R" == *"出错了"* && "$R" != *$'\n'* ]]; then
-  report PASS "multi-line goal with fence preserved verbatim and flattened"
-else
-  report FAIL "fence-preservation got '$R'"
-fi
-rm -f "$T"
-
-# system-reminder block stripped, real content preserved (block-mode strip)
-T=$(make_transcript '{"type":"user","message":{"content":"<system-reminder>\nrunning hook X\nmore reminder text\n</system-reminder>\n实际的用户问题"}}
-')
-R=$(extract_goal_message "$T")
-if [[ "$R" == "实际的用户问题" && "$R" != *"running hook X"* && "$R" != *"system-reminder"* ]]; then
-  report PASS "system-reminder block stripped from goal"
-else
-  report FAIL "reminder-strip got '$R'"
-fi
-rm -f "$T"
-
-# Multi-line tool_result-only first entry skipped, multi-line second entry returned as flat goal
-T=$(make_transcript '{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t1","content":"some output"}]}}
-{"type":"user","message":{"content":"第二条\n包含两行"}}
-')
-R=$(extract_goal_message "$T")
-[[ "$R" == "第二条 包含两行" ]] && report PASS "tool_result skipped, multi-line next entry flattened" || report FAIL "got '$R'"
-rm -f "$T"
+check "list in order, quoted record ignored" $'Fix login redirect\nFix logout flow' "$(list_custom_titles "$TX")"
+check "last_custom_title" "Fix logout flow" "$(last_custom_title "$TX")"
+check "no titles → empty" "" "$(last_custom_title "$TMP/u.jsonl")"
 
 echo ""
-echo "=== _cap_chars (UTF-8 char-aware truncation) ==="
+echo "=== build_dialog ==="
 
-# ASCII shorter than max — no change
-R=$(printf '%s' "hello" | _cap_chars 10)
-[[ "$R" == "hello" ]] && report PASS "ASCII < max unchanged" || report FAIL "got '$R'"
+HEAD_MESSAGES=1
+TAIL_MESSAGES=5
+check "single message → LATEST only" "LATEST: only one" "$(build_dialog "" '["only one"]' "")"
+check "no messages → empty, even with title and Claude text" "" "$(build_dialog "T" '[]' "some reply")"
+check "full shape" $'CURRENT_TITLE: Fix login\nFIRST: a\nEARLIER: b\nLATEST: c\nCLAUDE: did it' \
+  "$(build_dialog "Fix login" '["a","b","c"]' $'did\n  it')"
 
-# ASCII exactly max — boundary, no truncation
-R=$(printf '%s' "hello" | _cap_chars 5)
-[[ "$R" == "hello" ]] && report PASS "ASCII == max unchanged" || report FAIL "got '$R'"
+# Head + tail window: first 1 and last 5 of 10 → indices 0,5..9
+D=$(build_dialog "" '["m0","m1","m2","m3","m4","m5","m6","m7","m8","m9"]' "")
+check "window keeps first + last 5" $'FIRST: m0\nEARLIER: m5\nEARLIER: m6\nEARLIER: m7\nEARLIER: m8\nLATEST: m9' "$D"
+TAIL_MESSAGES=0
+check "tail 0 still keeps LATEST" $'FIRST: m0\nLATEST: m3' "$(build_dialog "" '["m0","m1","m2","m3"]' "")"
+TAIL_MESSAGES=5
+HEAD_MESSAGES=0
+check "head 0 drops FIRST" $'EARLIER: m1\nLATEST: m2' "$(build_dialog "" '["m1","m2"]' "")"
+HEAD_MESSAGES=1
 
-# ASCII longer than max — appends "..."
-R=$(printf '%s' "hello world" | _cap_chars 5)
-[[ "$R" == "hello..." ]] && report PASS "ASCII > max truncated with ..." || report FAIL "got '$R'"
-
-# CJK longer than max — char-aware (not byte) truncation
-R=$(printf '%s' "中文中文" | _cap_chars 2)
-[[ "$R" == "中文..." ]] && report PASS "CJK truncation char-aware" || report FAIL "got '$R'"
-
-# Mixed ASCII + CJK at boundary — no mid-char split
-R=$(printf '%s' "ASCII中文" | _cap_chars 6)
-[[ "$R" == "ASCII中..." ]] && report PASS "mixed ASCII+CJK boundary safe" || report FAIL "got '$R'"
-
-# Mixed input exactly at max
-R=$(printf '%s' "ASCII中文" | _cap_chars 7)
-[[ "$R" == "ASCII中文" ]] && report PASS "mixed exactly at max" || report FAIL "got '$R'"
-
-# Empty input → empty output
-R=$(printf '' | _cap_chars 10)
-[[ -z "$R" ]] && report PASS "empty input → empty" || report FAIL "got '$R'"
-
-# Suffix-override: empty suffix on truncation
-R=$(printf '%s' "hello world" | _cap_chars 5 '')
-[[ "$R" == "hello" ]] && report PASS "empty suffix omits trailing marker" || report FAIL "got '$R'"
-
-# Run under LC_ALL=C — must still produce char-correct CJK truncation
-R=$(LC_ALL=C bash -c "source $SCRIPT_DIR/hooks/lib/common.sh; printf '%s' '中文中文' | _cap_chars 2")
-[[ "$R" == "中文..." ]] && report PASS "CJK truncation works under LC_ALL=C" || report FAIL "LC=C got '$R'"
-
-echo ""
-echo "=== extract_user_messages exclude ==="
-
-# Three user messages; exclude the first → tail returns only the other two
-T=$(make_transcript '{"type":"user","message":{"content":"first goal message"}}
-{"type":"user","message":{"content":"second mid"}}
-{"type":"user","message":{"content":"third tail"}}
-')
-R=$(extract_user_messages "$T" "" "first goal message")
-if [[ "$R" != *"first goal message"* && "$R" == *"second mid"* && "$R" == *"third tail"* ]]; then
-  report PASS "exclude=first removes first from sample"
-else
-  report FAIL "exclude got '$R'"
-fi
-rm -f "$T"
-
-# No exclude arg → behaves as before (first message included)
-T=$(make_transcript '{"type":"user","message":{"content":"first goal message"}}
-{"type":"user","message":{"content":"second mid"}}
-')
-R=$(extract_user_messages "$T" "")
-[[ "$R" == *"first goal message"* ]] && report PASS "no exclude → first still in sample" || report FAIL "no-exclude got '$R'"
-rm -f "$T"
-
-# Multi-line user entry → flattened to one line so format_dialog labels it once
-T=$(make_transcript '{"type":"user","message":{"content":"first goal"}}
-{"type":"user","message":{"content":"multi\nline\nuser"}}
-')
-R=$(extract_user_messages "$T" "")
-N=$(printf '%s\n' "$R" | wc -l | tr -d ' ')
-if [[ "$N" -eq 2 && "$R" == *"first goal"* && "$R" == *"multi line user"* ]]; then
-  report PASS "multi-line user entry flattened to one line"
-else
-  report FAIL "multi-line user got (lines=$N): '$R'"
-fi
-rm -f "$T"
-
-# Multi-line GOAL passed as exclude is flattened before grep -vxF
-T=$(make_transcript '{"type":"user","message":{"content":"goal\nspans two"}}
-{"type":"user","message":{"content":"another"}}
-')
-R=$(extract_user_messages "$T" "" $'goal\nspans two')
-if [[ "$R" != *"goal spans two"* && "$R" == *"another"* ]]; then
-  report PASS "multi-line exclude flattened before dedup"
-else
-  report FAIL "multi-line exclude got '$R'"
-fi
-rm -f "$T"
-
-# After Task 1.1 GOAL is single-line. A multi-line user entry whose flattened form
-# equals that single-line GOAL must be excluded — the real end-to-end dedup case.
-T=$(make_transcript '{"type":"user","message":{"content":"goal\nspans two"}}
-{"type":"user","message":{"content":"another"}}
-')
-R=$(extract_user_messages "$T" "" "goal spans two")
-N=$(printf '%s\n' "$R" | wc -l | tr -d ' ')
-if [[ "$N" -eq 1 && "$R" == "another" ]]; then
-  report PASS "single-line exclude vs multi-line user entry"
-else
-  report FAIL "flat-exclude got (lines=$N): '$R'"
-fi
-rm -f "$T"
-
-# system-reminder block within a user entry stripped (block-mode)
-T=$(make_transcript '{"type":"user","message":{"content":"<system-reminder>\nhook ran with X\nmore reminder text\n</system-reminder>\n实际内容"}}
-')
-R=$(extract_user_messages "$T" "")
-if [[ "$R" == "实际内容" && "$R" != *"hook ran"* ]]; then
-  report PASS "system-reminder block stripped from user entry"
-else
-  report FAIL "user-reminder got '$R'"
-fi
-rm -f "$T"
-
-# local-command-stdout block stripped (block-mode)
-T=$(make_transcript '{"type":"user","message":{"content":"<local-command-stdout>\nlots of output\nmore output\n</local-command-stdout>\n实际问题"}}
-')
-R=$(extract_user_messages "$T" "")
-if [[ "$R" == "实际问题" && "$R" != *"output"* ]]; then
-  report PASS "local-command-stdout block stripped from user entry"
-else
-  report FAIL "stdout-block got '$R'"
-fi
-rm -f "$T"
-
-echo ""
-echo "=== format_dialog (goal, users, state) ==="
-
-# Full: GOAL + USER + STATE
-R=$(format_dialog "the goal" $'user one\nuser two' "state content here")
-EXPECTED=$'GOAL: the goal\nUSER: user one\nUSER: user two\nSTATE: state content here'
-[[ "$R" == "$EXPECTED" ]] && report PASS "GOAL + USER + STATE" || report FAIL "full got: $R"
-
-# No STATE
-R=$(format_dialog "the goal" "user one" "")
-EXPECTED=$'GOAL: the goal\nUSER: user one'
-[[ "$R" == "$EXPECTED" ]] && report PASS "GOAL + USER, no STATE" || report FAIL "no-state got: $R"
-
-# GOAL only
-R=$(format_dialog "just the goal" "" "")
-[[ "$R" == "GOAL: just the goal" ]] && report PASS "GOAL only" || report FAIL "goal-only got: $R"
-
-# GOAL + STATE (no USER in between)
-R=$(format_dialog "the goal" "" "state content")
-EXPECTED=$'GOAL: the goal\nSTATE: state content'
-[[ "$R" == "$EXPECTED" ]] && report PASS "GOAL + STATE (skip USER)" || report FAIL "goal+state got: $R"
-
-# Empty USER content with blank line → blank filtered
-R=$(format_dialog "g" $'user one\n\nuser two' "s")
-EXPECTED=$'GOAL: g\nUSER: user one\nUSER: user two\nSTATE: s'
-[[ "$R" == "$EXPECTED" ]] && report PASS "blank USER lines dropped" || report FAIL "blank-drop got: $R"
-
-# All empty → empty output
-R=$(format_dialog "" "" "")
-[[ -z "$R" ]] && report PASS "all-empty → empty" || report FAIL "all-empty got: $R"
-
-# Multi-line GOAL flattened to one labeled line
-R=$(format_dialog $'goal line one\ngoal line two' "user one" "state content")
-EXPECTED=$'GOAL: goal line one goal line two\nUSER: user one\nSTATE: state content'
-[[ "$R" == "$EXPECTED" ]] && report PASS "multi-line GOAL flattened" || report FAIL "multi-goal got: $R"
-
-# Multi-line STATE flattened to one labeled line
-R=$(format_dialog "g" "user one" $'state line one\nstate line two')
-EXPECTED=$'GOAL: g\nUSER: user one\nSTATE: state line one state line two'
-[[ "$R" == "$EXPECTED" ]] && report PASS "multi-line STATE flattened" || report FAIL "multi-state got: $R"
-
-# GOAL with embedded tabs and CR collapsed to single spaces
-R=$(format_dialog $'tabbed\tgoal\rwith CR' "" "")
-[[ "$R" == "GOAL: tabbed goal with CR" ]] && report PASS "tab/CR in GOAL flattened" || report FAIL "tab/CR got: $R"
+# Each message is capped on its own; a long paste keeps head and tail.
+LONG=$(printf 'x%.0s' $(seq 1 1000))
+D=$(build_dialog "" "$(jq -nc --arg l "start ${LONG} question?" '[$l, "short"]')" "")
+FIRST_LINE=$(printf '%s\n' "$D" | head -1)
+check "long FIRST capped to 500 chars" "500" "$(printf '%s' "${FIRST_LINE#FIRST: }" | jq -Rs length)"
+AGAIN=$(build_dialog "" "$(jq -nc --arg l "${FIRST_LINE#FIRST: }" '[$l, "short"]')" "" | head -1)
+check "capping a capped message changes nothing" "$FIRST_LINE" "$AGAIN"
+[[ "$FIRST_LINE" == "FIRST: start"* && "$FIRST_LINE" == *"question?" && "$FIRST_LINE" == *" … "* ]] \
+  && report PASS "long message keeps head and tail" || report FAIL "head/tail not kept: ${FIRST_LINE:0:80}…"
+check "short LATEST untouched" "LATEST: short" "$(printf '%s\n' "$D" | tail -1)"
+CJK=$(printf '中%.0s' $(seq 1 700))
+D=$(build_dialog "" "$(jq -nc --arg l "$CJK" '[$l]')" "")
+check "CJK cap counts characters, not bytes" "1" "$(( $(printf '%s' "${D#LATEST: }" | jq -Rs length) <= 605 ))"
 
 echo ""
 echo "================================"

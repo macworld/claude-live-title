@@ -3,10 +3,8 @@
 # title-generation prompt by diffing the dry-run output of generate_title
 # against the committed snapshot at tests/snapshots/prompt.txt.
 #
-# Update procedure when the prompt is intentionally edited:
-#   bash -c 'source hooks/lib/common.sh; MAX_LENGTH=30 LANGUAGE=auto \
-#     CLAUDE_LIVE_TITLE_PRINT_DIALOG=1 generate_title "$(cat tests/snapshots/dialog-fixture.txt)"' \
-#     > tests/snapshots/prompt.txt
+# When the prompt is edited on purpose, regenerate the snapshot with:
+#   UPDATE_SNAPSHOT=1 bash tests/test-prompt-snapshot.sh
 set -eu
 
 PASS=0
@@ -30,10 +28,11 @@ MAX_LENGTH=30
 LANGUAGE=auto
 
 DIALOG=$(cat <<'EOF'
-GOAL: refactor the auth module
-USER: split jwt parsing into its own helper
-USER: also rename verify_signature to verify_jwt_sig
-STATE: extracted parse_jwt to lib/auth/jwt.py and updated callers
+CURRENT_TITLE: Refactor auth module
+FIRST: refactor the auth module
+EARLIER: split jwt parsing into its own helper
+LATEST: also rename verify_signature to verify_jwt_sig
+CLAUDE: extracted parse_jwt to lib/auth/jwt.py and updated callers
 EOF
 )
 
@@ -41,6 +40,10 @@ echo "=== prompt snapshot (LANGUAGE=auto) ==="
 
 ACTUAL=$(CLAUDE_LIVE_TITLE_PRINT_DIALOG=1 generate_title "$DIALOG")
 SNAP="$SCRIPT_DIR/tests/snapshots/prompt.txt"
+if [[ -n "${UPDATE_SNAPSHOT-}" ]]; then
+  printf '%s' "$ACTUAL" > "$SNAP"
+  echo "  snapshot written to $SNAP"
+fi
 EXPECTED=$(cat "$SNAP")
 
 if [[ "$ACTUAL" == "$EXPECTED" ]]; then
@@ -57,7 +60,7 @@ echo "=== language instruction substitution ==="
 LANGUAGE=zh
 ACT=$(CLAUDE_LIVE_TITLE_PRINT_DIALOG=1 generate_title "$DIALOG")
 [[ "$ACT" == *"Write the title in Chinese."* ]] \
-  && report PASS "LANGUAGE=zh → Chinese instruction in rule 7" \
+  && report PASS "LANGUAGE=zh → Chinese instruction" \
   || report FAIL "zh instruction missing"
 
 LANGUAGE=ja
@@ -73,6 +76,17 @@ ACT=$(CLAUDE_LIVE_TITLE_PRINT_DIALOG=1 generate_title "$DIALOG")
   || report FAIL "de instruction missing"
 
 LANGUAGE=auto
+ACT=$(CLAUDE_LIVE_TITLE_PRINT_DIALOG=1 generate_title "$DIALOG")
+[[ "$ACT" == *"Use the language the user writes in"* ]] \
+  && report PASS "LANGUAGE=auto → follow the user's language" \
+  || report FAIL "auto instruction missing"
+
+MAX_LENGTH=50
+ACT=$(CLAUDE_LIVE_TITLE_PRINT_DIALOG=1 generate_title "$DIALOG")
+[[ "$ACT" == *"about 35 columns, never more than 50."* ]] \
+  && report PASS "maxLength 50 → target 35, hard cap 50" \
+  || report FAIL "length line not rendered from maxLength"
+MAX_LENGTH=30
 
 echo ""
 echo "=== dry-run does not invoke claude ==="
