@@ -43,6 +43,7 @@ export STUB_LOG
 #   error         is_error with a generic API error
 #   no-lean       rejects --safe-mode like an older CLI (exit 5)
 #   no-tools      rejects --tools as well, like a much older CLI (exit 5)
+#   hang          never answers; the plugin's watchdog has to kill it
 # A shorten request (prompt holds <title>) is answered with $STUB_SHORT, or
 # with $STUB_SHORT2 when it is the second shorten request in a row.
 # $STUB_LS_DIRS: directories whose contents are listed into the log at call
@@ -69,6 +70,7 @@ case "$mode" in
   quota)     jq -nc '{type:"result",subtype:"success",is_error:true,result:"You'"'"'ve hit your session limit · resets 3:20am (Asia/Singapore)"}' ;;
   unflagged) jq -nc '{type:"result",subtype:"success",is_error:false,result:"You'"'"'ve hit your session limit · resets 3:20am (Asia/Singapore)"}' ;;
   error)     jq -nc '{type:"result",subtype:"success",is_error:true,result:"API Error: 500 Internal server error"}' ;;
+  hang)      exec sleep 30 ;;
 esac
 STUB
 chmod +x "$FIX/bin/claude"
@@ -710,6 +712,45 @@ human "start on the export feature" p1
 reply "Done."
 cc_title "Export feature"
 check "resumed /clear session the plugin never saw: no stand-in" "" "$(run_apply "Export feature" "and the import")"
+
+echo ""
+echo "=== model call time budget ==="
+# One hook run holds the session lock, so all of its model calls together
+# must finish well inside LOCK_STALE_SECS, or a second generation starts
+# while the first is still running.
+ask_model_with() {   # <shell snippet run after sourcing common.sh>; prints MODEL_STATUS
+  bash -c 'source "$1/hooks/lib/common.sh"; detect_platform; '"$1"'
+    _ask_model "<task>x</task>" >/dev/null 2>&1; echo "$MODEL_STATUS"' _ "$SCRIPT_DIR"
+}
+R=$(bash -c 'source "$1/hooks/lib/common.sh"; _run_with_timeout 1 /dev/null sleep 5; echo "rc=$? timed_out=$RUN_TIMED_OUT"' _ "$SCRIPT_DIR")
+check "_run_with_timeout: a hanging command is killed and flagged" "rc=143 timed_out=true" "$R"
+R=$(bash -c 'source "$1/hooks/lib/common.sh"; _run_with_timeout 5 /dev/null true; echo "rc=$? timed_out=$RUN_TIMED_OUT"' _ "$SCRIPT_DIR")
+check "_run_with_timeout: a quick command is not flagged" "rc=0 timed_out=false" "$R"
+
+new_session timeout
+START=$(now_ms)
+STATUS=$(STUB_MODE=hang ask_model_with 'MODEL_TIMEOUT_SECS=1')
+ELAPSED=$(( ($(now_ms) - START) / 1000 ))
+check "hung model call: status is timeout" "timeout" "$STATUS"
+check "hung model call: not retried with the basic flag set" "1" "$(calls)"
+(( ELAPSED < 10 )) && report PASS "hung model call: killed after MODEL_TIMEOUT_SECS (${ELAPSED}s)" || report FAIL "hung model call took ${ELAPSED}s"
+[[ -f "$CLAUDE_PLUGIN_DATA/cooldown-until" ]] && report PASS "hung model call: cooldown set" || report FAIL "no cooldown after a timeout"
+
+new_session budget
+STATUS=$(ask_model_with 'GEN_DEADLINE=$(( $(date +%s) - 1 ))')
+check "run budget spent: no call made" "0" "$(calls)"
+check "run budget spent: status says so" "budget" "$STATUS"
+[[ ! -f "$CLAUDE_PLUGIN_DATA/cooldown-until" ]] && report PASS "run budget spent: no cooldown, the API didn't fail" || report FAIL "cooldown set"
+
+new_session budgetcap
+START=$(now_ms)
+STATUS=$(STUB_MODE=hang ask_model_with 'GEN_DEADLINE=$(( $(date +%s) + 2 ))')
+ELAPSED=$(( ($(now_ms) - START) / 1000 ))
+check "2s of budget left: the call gets only that" "timeout" "$STATUS"
+(( ELAPSED < 10 )) && report PASS "2s of budget left: killed at the deadline (${ELAPSED}s)" || report FAIL "call ran ${ELAPSED}s past the budget"
+R=$(bash -c 'source "$1/hooks/lib/common.sh"; echo "${GEN_BUDGET_SECS:-0} ${LOCK_STALE_SECS:-0}"' _ "$SCRIPT_DIR")
+BUDGET=${R% *}; STALE=${R#* }
+(( BUDGET > 0 && BUDGET < STALE )) && report PASS "run budget (${BUDGET}s) is below the stale-lock age (${STALE}s)" || report FAIL "budget/stale-lock: $R"
 
 echo ""
 echo "================================"

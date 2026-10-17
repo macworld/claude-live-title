@@ -18,8 +18,9 @@ COMMON_SH_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SANITIZE_RULES_FILE="${COMMON_SH_DIR}/sanitize-line-rules.tsv"
 
 # ── Internal Constants ──
-LOCK_STALE_SECS=90          # > model timeout, so a live lock never looks stale
-MODEL_TIMEOUT_SECS=45       # watchdog for the `claude -p` helper call
+GEN_BUDGET_SECS=60          # all model calls of one hook run (title + shortening)
+LOCK_STALE_SECS=90          # > GEN_BUDGET_SECS, so a live lock never looks stale
+MODEL_TIMEOUT_SECS=45       # one `claude -p` call, within the run's budget
 REFRESH_INTERVAL=900        # Stop re-checks the title after this much activity
 QUOTA_COOLDOWN_SECS=600     # pause all sessions after a usage-limit error
 ERROR_COOLDOWN_SECS=120     # pause after any other failed call
@@ -831,35 +832,41 @@ Output the title (or SKIP) alone on one line: no quotes, no label, no trailing p
 }
 
 # _run_with_timeout <seconds> <stdin_file> <cmd...>
-# Run a command with a wall-clock limit. stdin is passed as a file because a
-# background job in a non-interactive shell otherwise reads /dev/null.
+# Run a command with a wall-clock limit; RUN_TIMED_OUT tells whether the
+# watchdog had to kill it. stdin is passed as a file because a background
+# job in a non-interactive shell otherwise reads /dev/null.
 _run_with_timeout() {
   local secs="$1" infile="$2"; shift 2
+  RUN_TIMED_OUT=false
   "$@" < "$infile" &
   local pid=$!
   (
     trap 'kill "$sp" 2>/dev/null; exit 0' TERM
     sleep "$secs" & sp=$!
     wait "$sp"
+    # From here on the command is out of time: exit non-zero even if the
+    # parent's TERM arrives now.
+    trap - TERM
     kill -TERM "$pid" 2>/dev/null
+    exit 124
   ) &
   local watchdog=$!
   local rc=0
   wait "$pid" || rc=$?
   kill -TERM "$watchdog" 2>/dev/null
-  wait "$watchdog" 2>/dev/null
+  wait "$watchdog" 2>/dev/null || RUN_TIMED_OUT=true
   return "$rc"
 }
 
-# _title_model_call <lean|basic> <prompt_file>
-# Prints the CLI's JSON output. "lean" also strips other plugins' hooks,
-# CLAUDE.md and MCP (~700 input tokens instead of ~25K) and asks for low
-# effort; "basic" is for Claude Code versions that reject those flags. Both
-# run without tools: the prompt carries transcript text and the project's
-# .claude/live-title.md, which must never get to run anything. A CLI that
-# rejects --tools gets no title.
+# _title_model_call <lean|basic> <prompt_file> [seconds]
+# Prints the CLI's JSON output; exits 124 when the call had to be killed.
+# "lean" also strips other plugins' hooks, CLAUDE.md and MCP (~700 input
+# tokens instead of ~25K) and asks for low effort; "basic" is for Claude Code
+# versions that reject those flags. Both run without tools: the prompt
+# carries transcript text and the project's .claude/live-title.md, which must
+# never get to run anything. A CLI that rejects --tools gets no title.
 _title_model_call() {
-  local mode="$1" prompt_file="$2"
+  local mode="$1" prompt_file="$2" limit="${3:-$MODEL_TIMEOUT_SECS}"
   local -a args=(-p --no-session-persistence --model "$MODEL"
     --system-prompt "$TITLE_SYSTEM_PROMPT" --output-format json --tools "")
   if [[ "$mode" == "lean" ]]; then
@@ -869,7 +876,10 @@ _title_model_call() {
   # runs, letting our own hooks skip it (basic mode still loads plugins).
   (
     export CLAUDE_LIVE_TITLE_INTERNAL=1
-    _run_with_timeout "$MODEL_TIMEOUT_SECS" "$prompt_file" claude "${args[@]}" 2>/dev/null
+    rc=0
+    _run_with_timeout "$limit" "$prompt_file" claude "${args[@]}" 2>/dev/null || rc=$?
+    [[ "$RUN_TIMED_OUT" == "true" ]] && exit 124
+    exit "$rc"
   )
 }
 
@@ -904,7 +914,21 @@ _parse_model_output() {
 # One model call with the lean flags, falling back to the basic ones.
 # Sets MODEL_STATUS/MODEL_TEXT; returns 0 when the model answered. Failures
 # start a cooldown so a usage limit is not hit again and again.
+# The calls of one hook run (the title, then up to two shortenings) share
+# GEN_BUDGET_SECS from the moment title_update starts: the run holds the
+# session lock, which other hooks treat as stale after LOCK_STALE_SECS.
 _ask_model() {
+  [[ -n "${GEN_DEADLINE:-}" ]] || GEN_DEADLINE=$(( $(date +%s) + GEN_BUDGET_SECS ))
+  local left=$(( GEN_DEADLINE - $(date +%s) ))
+  MODEL_STATUS="budget"
+  MODEL_TEXT=""
+  if (( left <= 0 )); then
+    log "Run budget of ${GEN_BUDGET_SECS}s spent; not calling the model again"
+    return 1
+  fi
+  local limit="$MODEL_TIMEOUT_SECS"
+  (( left < limit )) && limit="$left"
+
   # The prompt holds conversation text, so it stays in the private data dir.
   local prompt_file
   mkdir -p "$DATA_DIR" 2>/dev/null
@@ -916,12 +940,19 @@ _ask_model() {
     modes=(basic)
   fi
 
-  log "Model call: model=$MODEL language=$LANGUAGE modes=${modes[*]}"
+  log "Model call: model=$MODEL language=$LANGUAGE modes=${modes[*]} limit=${limit}s"
   local mode out rc lean_blamed=false
   MODEL_STATUS="cli"
   for mode in "${modes[@]}"; do
     rc=0
-    out=$(_title_model_call "$mode" "$prompt_file") || rc=$?
+    out=$(_title_model_call "$mode" "$prompt_file" "$limit") || rc=$?
+    if (( rc == 124 )); then
+      # A hung call says nothing about the flags; the basic set won't help.
+      MODEL_STATUS="timeout"
+      MODEL_TEXT=""
+      log "Model call ($mode): no answer within ${limit}s, killed"
+      break
+    fi
     _parse_model_output "$out"
     log "Model call ($mode): rc=$rc status=$MODEL_STATUS"
     [[ "$MODEL_STATUS" == "ok" || "$MODEL_STATUS" == "quota" ]] && break
@@ -943,6 +974,10 @@ _ask_model() {
       ;;
     quota)
       set_cooldown "$QUOTA_COOLDOWN_SECS" "usage limit: $MODEL_TEXT"
+      return 1
+      ;;
+    timeout)
+      set_cooldown "$ERROR_COOLDOWN_SECS" "model call timed out after ${limit}s"
       return 1
       ;;
     *)
@@ -1133,6 +1168,7 @@ title_update() {
   local human_count
   human_count=$(printf '%s' "$humans" | jq 'length' 2>/dev/null || echo 0)
   [[ "$human_count" =~ ^[0-9]+$ ]] || human_count=0
+  GEN_DEADLINE=$(( $(date +%s) + GEN_BUDGET_SECS ))
 
   local ai_text dialog
   # Claude Code's own error text is no reply; the transcript reader skips
