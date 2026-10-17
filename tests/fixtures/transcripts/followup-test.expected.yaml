@@ -1,0 +1,5 @@
+# Adding a test for the feature is part of the same goal: keep the title.
+must_contain_any: []
+must_not_contain: []
+title_must_not_contain: []
+keep_current_title: true

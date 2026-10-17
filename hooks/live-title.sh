@@ -18,8 +18,8 @@ source "${SCRIPT_DIR}/lib/common.sh"
 detect_platform
 INPUT=$(cat)
 exec >/dev/null
-IFS=$'\x1f' read -r SESSION_ID TRANSCRIPT_PATH PROMPT_ID CC_TITLE <<< "$(printf '%s' "$INPUT" | jq -r \
-  '[(.session_id // ""), (.transcript_path // ""), (.prompt_id // ""), (.session_title // "" | gsub("[\\r\\n]"; " "))] | join("\u001f")')"
+IFS=$'\x1f' read -r SESSION_ID TRANSCRIPT_PATH PROMPT_ID CWD CC_TITLE <<< "$(printf '%s' "$INPUT" | jq -r \
+  '[(.session_id // ""), (.transcript_path // ""), (.prompt_id // ""), (.cwd // ""), (.session_title // "" | gsub("[\\r\\n]"; " "))] | join("\u001f")')"
 # UserPromptSubmit delivers the current prompt here before it's in transcript.
 PROMPT=$(printf '%s' "$INPUT" | jq -r '.prompt // empty')
 
@@ -27,6 +27,7 @@ PROMPT=$(printf '%s' "$INPUT" | jq -r '.prompt // empty')
 
 load_config
 [[ "$LIVE_UPDATE" != "true" ]] && { log "Live update disabled"; exit 0; }
+load_project_style "$CWD"
 
 state_init "$(sanitize_session_id "$SESSION_ID")"
 is_pinned && { log "Session pinned, skipping"; exit 0; }

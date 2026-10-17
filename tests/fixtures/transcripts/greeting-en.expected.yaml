@@ -1,0 +1,3 @@
+# A bare greeting carries no task. The session stays unnamed until one
+# arrives instead of being called "Greeting" or "New session".
+expect_skip: true

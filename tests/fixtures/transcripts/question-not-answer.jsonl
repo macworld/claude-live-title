@@ -1,0 +1,2 @@
+{"type":"user","origin":{"kind":"human"},"promptSource":"typed","message":{"role":"user","content":"what does git rebase --onto do?"}}
+{"type":"assistant","message":{"model":"claude-opus-5-5","content":[{"type":"text","text":"It replays the commits after the old base onto a new base, so you can move a branch that was cut from the wrong place."}]}}

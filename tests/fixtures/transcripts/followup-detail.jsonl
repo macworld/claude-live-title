@@ -1,0 +1,7 @@
+{"type":"user","origin":{"kind":"human"},"promptSource":"typed","message":{"role":"user","content":"build the CSV export for the reports page"}}
+{"type":"assistant","message":{"model":"claude-opus-5-5","content":[{"type":"text","text":"Added an Export CSV button to ReportsPage that downloads the visible rows."}]}}
+{"type":"custom-title","customTitle":"Build reports CSV export"}
+{"type":"user","origin":{"kind":"human"},"promptSource":"typed","message":{"role":"user","content":"include the filters in the file name"}}
+{"type":"assistant","message":{"model":"claude-opus-5-5","content":[{"type":"text","text":"The file is now named reports-<from>-<to>-<status>.csv."}]}}
+{"type":"user","origin":{"kind":"human"},"promptSource":"typed","message":{"role":"user","content":"the date column should use ISO format"}}
+{"type":"assistant","message":{"model":"claude-opus-5-5","content":[{"type":"text","text":"Dates are written as YYYY-MM-DD now."}]}}

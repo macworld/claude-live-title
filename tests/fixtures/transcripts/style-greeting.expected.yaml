@@ -1,0 +1,3 @@
+# Naming rules don't turn a greeting into a title.
+expect_skip: true
+style: "Start the title with the ticket ID (like PROJ-123) when the user mentions one."

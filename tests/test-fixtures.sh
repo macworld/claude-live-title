@@ -18,6 +18,12 @@
 #   - max_display_columns: title width (CJK = 2) stays within it
 #   - keep_current_title: true → the title equals the fixture's last
 #     custom-title (stability)
+#   - expect_skip: true → the model answers SKIP (no task yet); any other
+#     fixture fails on SKIP unless allow_skip: true
+#   - style: "<JSON string>" → naming rules in effect for this fixture
+#
+# SAMPLES=N (with RUN_LIVE=1) runs every fixture N times, since the model
+# doesn't answer the same way every time.
 #
 # Config is pinned to the defaults so results don't depend on the local
 # config file.
@@ -87,6 +93,82 @@ assert_no_needles_in() {
   done < <(printf '%s' "$json_array" | jq -r '.[]?' 2>/dev/null)
 }
 
+SAMPLES="${SAMPLES:-1}"
+[[ "$SAMPLES" =~ ^[1-9][0-9]*$ ]] || SAMPLES=1
+
+# live_check <name> <expected.yaml> <current title> <dialog>
+# One real model call for a fixture, checked like the hooks would use it.
+live_check() {
+  local name="$1" exp="$2" current="$3" dialog="$4" label="$1 [live]"
+  (( SAMPLES > 1 )) && label="$1 [live $sample/$SAMPLES]"
+  local title_raw title
+  title_raw=$(generate_title "$dialog" 2>/dev/null || true)
+  title=$(clean_title "$title_raw")
+
+  # SKIP means "no task yet"; with a current title the hooks keep that one.
+  if [[ -n "$title" ]] && is_skip_reply "$title"; then
+    if [[ "$(read_yaml_scalar "$exp" expect_skip)" == "true" ]]; then
+      report PASS "$label: skipped, no task yet"
+      return 0
+    elif [[ -n "$current" ]]; then
+      title="$current"
+    elif [[ "$(read_yaml_scalar "$exp" allow_skip)" == "true" ]]; then
+      report PASS "$label: skipped (allowed)"
+      return 0
+    else
+      report FAIL "$label: model answered SKIP for a session with a task"
+      return 0
+    fi
+  fi
+  [[ -n "$title" ]] && title=$(fit_title "$title")
+  if [[ -z "$title" ]]; then
+    report FAIL "$label: empty title from model"
+    return 0
+  fi
+  echo "    → live title: $title"
+  if [[ "$(read_yaml_scalar "$exp" expect_skip)" == "true" ]]; then
+    report FAIL "$label: expected SKIP, got '$title'"
+    return 0
+  fi
+
+  local must_any matched needle
+  must_any=$(read_yaml_array "$exp" must_contain_any)
+  if [[ "$(printf '%s' "$must_any" | jq -r 'length')" -gt 0 ]]; then
+    matched=0
+    while IFS= read -r needle; do
+      [[ -z "$needle" ]] && continue
+      [[ "$title" == *"$needle"* ]] && matched=1
+    done < <(printf '%s' "$must_any" | jq -r '.[]?' 2>/dev/null)
+    if [[ "$matched" -eq 1 ]]; then
+      report PASS "$label: title contains one of must_contain_any"
+    else
+      report FAIL "$label: title='$title' lacks all of $must_any"
+    fi
+  fi
+
+  assert_no_needles_in "$name title" "$title" "$(read_yaml_array "$exp" must_not_contain)"
+  assert_no_needles_in "$name title" "$title" "$(read_yaml_array "$exp" title_must_not_contain)"
+
+  local max_cols width
+  max_cols=$(read_yaml_scalar "$exp" max_display_columns)
+  if [[ "$max_cols" =~ ^[0-9]+$ ]]; then
+    width=$(display_width "$title")
+    if (( width <= max_cols )); then
+      report PASS "$label: width $width ≤ $max_cols"
+    else
+      report FAIL "$label: width $width > $max_cols"
+    fi
+  fi
+
+  if [[ "$(read_yaml_scalar "$exp" keep_current_title)" == "true" ]]; then
+    if [[ "$title" == "$current" ]]; then
+      report PASS "$label: current title kept"
+    else
+      report FAIL "$label: '$current' was reworded to '$title'"
+    fi
+  fi
+}
+
 for tx in "${FIXTURES[@]}"; do
   name=$(basename "${tx%.jsonl}")
   exp="${tx%.jsonl}.expected.yaml"
@@ -118,49 +200,11 @@ for tx in "${FIXTURES[@]}"; do
   assert_no_needles_in "$name dialog" "$DIALOG" "$must_not"
 
   if [[ -n "${RUN_LIVE-}" ]]; then
-    TITLE_RAW=$(generate_title "$DIALOG" 2>/dev/null || true)
-    TITLE=$(clean_title "$TITLE_RAW")
-    [[ -n "$TITLE" ]] && TITLE=$(fit_title "$TITLE")
-    if [[ -z "$TITLE" ]]; then
-      report FAIL "$name [live]: empty title from model"
-      continue
-    fi
-    echo "    → live title: $TITLE"
-
-    must_any=$(read_yaml_array "$exp" must_contain_any)
-    if [[ "$(printf '%s' "$must_any" | jq -r 'length')" -gt 0 ]]; then
-      matched=0
-      while IFS= read -r needle; do
-        [[ -z "$needle" ]] && continue
-        [[ "$TITLE" == *"$needle"* ]] && matched=1
-      done < <(printf '%s' "$must_any" | jq -r '.[]?' 2>/dev/null)
-      if [[ "$matched" -eq 1 ]]; then
-        report PASS "$name [live]: title contains one of must_contain_any"
-      else
-        report FAIL "$name [live]: title='$TITLE' lacks all of $must_any"
-      fi
-    fi
-
-    assert_no_needles_in "$name title" "$TITLE" "$must_not"
-    assert_no_needles_in "$name title" "$TITLE" "$(read_yaml_array "$exp" title_must_not_contain)"
-
-    max_cols=$(read_yaml_scalar "$exp" max_display_columns)
-    if [[ "$max_cols" =~ ^[0-9]+$ ]]; then
-      width=$(display_width "$TITLE")
-      if (( width <= max_cols )); then
-        report PASS "$name [live]: width $width ≤ $max_cols"
-      else
-        report FAIL "$name [live]: width $width > $max_cols"
-      fi
-    fi
-
-    if [[ "$(read_yaml_scalar "$exp" keep_current_title)" == "true" ]]; then
-      if [[ "$TITLE" == "$CURRENT" ]]; then
-        report PASS "$name [live]: current title kept"
-      else
-        report FAIL "$name [live]: '$CURRENT' was reworded to '$TITLE'"
-      fi
-    fi
+    STYLE=$(read_yaml_scalar "$exp" style)
+    [[ "$STYLE" == \"* ]] && STYLE=$(printf '%s' "$STYLE" | jq -r . 2>/dev/null || true)
+    for ((sample = 1; sample <= SAMPLES; sample++)); do
+      live_check "$name" "$exp" "$CURRENT" "$DIALOG"
+    done
   fi
 done
 

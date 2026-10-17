@@ -1,0 +1,6 @@
+# A conventional-commit style prefix from the user's rules.
+must_contain_any: ["fix:"]
+must_not_contain: []
+title_must_not_contain: []
+max_display_columns: 30
+style: "Begin the title with one of feat:, fix:, docs:, refactor:, chore: and then a short lowercase summary."

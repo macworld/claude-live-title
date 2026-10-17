@@ -1,0 +1,5 @@
+{"type":"user","origin":{"kind":"human"},"promptSource":"typed","message":{"role":"user","content":"the checkout test is flaky on CI, find out why"}}
+{"type":"assistant","message":{"model":"claude-opus-5-5","content":[{"type":"text","text":"The test races the payment mock; I added an await on the mock's ready promise."}]}}
+{"type":"custom-title","customTitle":"Fix flaky checkout test"}
+{"type":"user","origin":{"kind":"human"},"promptSource":"typed","message":{"role":"user","content":"thanks, that's all for today"}}
+{"type":"assistant","message":{"model":"claude-opus-5-5","content":[{"type":"text","text":"You're welcome!"}]}}

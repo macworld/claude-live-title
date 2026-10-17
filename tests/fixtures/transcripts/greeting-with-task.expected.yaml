@@ -1,0 +1,5 @@
+# A greeting in front of a real request must not make the model skip it.
+must_contain_any: ["login", "Login", "auth"]
+must_not_contain: []
+title_must_not_contain: ["Greeting", "greeting"]
+max_display_columns: 30

@@ -17,7 +17,7 @@ Claude Code plugin: auto-generate meaningful session titles in real-time. The pl
 # All suites (stubbed `claude`, throwaway data dir, no network)
 for t in tests/test-*.sh; do bash "$t"; done
 
-# Fixtures against the real model
+# Fixtures against the real model (SAMPLES=4 runs each 4 times; use it after prompt changes)
 RUN_LIVE=1 bash tests/test-fixtures.sh
 
 # Regenerate the prompt snapshot after an intended prompt change

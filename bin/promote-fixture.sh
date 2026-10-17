@@ -95,6 +95,7 @@ fi
 
 DIALOG=$(printf '%s' "$EVENT" | jq -r '.dialog')
 TITLE=$(printf '%s' "$EVENT" | jq -r '.title')
+STYLE_EV=$(printf '%s' "$EVENT" | jq -r '.style // empty')
 SID=$(printf '%s' "$EVENT" | jq -r '.session_id // ""')
 
 if [[ -z "$DIALOG" ]]; then
@@ -159,6 +160,10 @@ must_not_contain: []
 title_must_not_contain: []
 max_display_columns: 30
 EOF
+# The naming rules in effect, as a JSON string (newlines escaped).
+if [[ -n "$STYLE_EV" ]]; then
+  printf 'style: %s\n' "$(jq -n --arg s "$STYLE_EV" '$s')" >> "$EXP"
+fi
 
 echo "Wrote: $TX"
 echo "Wrote: $EXP"

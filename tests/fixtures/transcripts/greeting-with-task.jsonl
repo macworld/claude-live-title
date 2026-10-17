@@ -1,0 +1,2 @@
+{"type":"user","origin":{"kind":"human"},"promptSource":"typed","message":{"role":"user","content":"hi! can you fix the flaky login test in auth.spec.ts? it fails about one run in five"}}
+{"type":"assistant","message":{"model":"claude-opus-5-5","content":[{"type":"text","text":"Sure. Looking at auth.spec.ts now: the test awaits the redirect before the session cookie is set."}]}}

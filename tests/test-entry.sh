@@ -29,6 +29,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 FIX=$(mktemp -d)
 trap 'rm -rf "$FIX"' EXIT
 export HOME="$FIX/home" CLAUDE_PLUGIN_DATA="$FIX/data"
+# Run inside a Claude Code session, the hooks' project dir would leak in.
+unset CLAUDE_PROJECT_DIR
 mkdir -p "$HOME" "$CLAUDE_PLUGIN_DATA" "$FIX/bin"
 STUB_LOG="$FIX/stub.log"
 export STUB_LOG
@@ -40,11 +42,15 @@ export STUB_LOG
 #   unflagged     usage-limit text but is_error=false (defensive path)
 #   error         is_error with a generic API error
 #   no-lean       rejects --safe-mode like an older CLI (exit 5)
-# A shorten request (prompt holds <title>) is answered with $STUB_SHORT.
+# A shorten request (prompt holds <title>) is answered with $STUB_SHORT, or
+# with $STUB_SHORT2 when it is the second shorten request in a row.
 cat > "$FIX/bin/claude" <<'STUB'
 #!/usr/bin/env bash
 input=$(cat)
-[[ "$input" == *"<title>"* && -n "${STUB_SHORT-}" ]] && STUB_TITLE="$STUB_SHORT"
+if [[ "$input" == *"<title>"* && -n "${STUB_SHORT-}" ]]; then
+  STUB_TITLE="$STUB_SHORT"
+  [[ "$input" == *"<title>${STUB_SHORT}</title>"* && -n "${STUB_SHORT2-}" ]] && STUB_TITLE="$STUB_SHORT2"
+fi
 { printf 'CALL'; printf ' [%s]' "$@"; printf '\n'; printf '%s\n' "$input"; echo "END"; } >> "$STUB_LOG"
 mode="${STUB_MODE:-ok}"
 if [[ "$mode" == "no-lean" ]]; then
@@ -80,7 +86,7 @@ new_session() {
   rm -f "$ST" "$PIN" "$CLAUDE_PLUGIN_DATA/cooldown-until" "$CLAUDE_PLUGIN_DATA/lean-flags-unsupported"
   rm -rf "$STATE_DIR/$H.lock"
   : > "$STUB_LOG"
-  unset STUB_MODE STUB_TITLE STUB_SHORT
+  unset STUB_MODE STUB_TITLE STUB_SHORT STUB_SHORT2
 }
 
 human()   { jq -nc --arg c "$1" --arg p "${2-}" '{type:"user", origin:{kind:"human"}, promptId:$p, message:{role:"user", content:$c}}' >> "$TX"; }
@@ -88,16 +94,18 @@ system_msg() { jq -nc --arg c "$1" --arg p "${2-}" '{type:"user", origin:{kind:"
 reply()   { jq -nc --arg t "$1" '{type:"assistant", message:{model:"claude-opus-5-5", content:[{type:"text", text:$t}]}}' >> "$TX"; }
 cc_title() { jq -nc --arg t "$1" --arg s "$SID" '{type:"custom-title", customTitle:$t, sessionId:$s}' >> "$TX"; }
 
-# run_live <prompt> [prompt_id] [session_title]
+# run_live <prompt> [prompt_id] [session_title]; $HOOK_CWD becomes the input's cwd
 run_live() {
-  jq -nc --arg sid "$SID" --arg tx "$TX" --arg p "$1" --arg pid "${2-}" --arg st "${3-}" \
+  jq -nc --arg sid "$SID" --arg tx "$TX" --arg p "$1" --arg pid "${2-}" --arg st "${3-}" --arg cwd "${HOOK_CWD-}" \
     '{session_id:$sid, transcript_path:$tx, prompt:$p}
      + (if $pid != "" then {prompt_id:$pid} else {} end)
-     + (if $st != "" then {session_title:$st} else {} end)' \
+     + (if $st != "" then {session_title:$st} else {} end)
+     + (if $cwd != "" then {cwd:$cwd} else {} end)' \
     | bash "$SCRIPT_DIR/hooks/live-title.sh" || true
 }
 run_stop() {
-  jq -nc --arg sid "$SID" --arg tx "$TX" '{session_id:$sid, transcript_path:$tx}' \
+  jq -nc --arg sid "$SID" --arg tx "$TX" --arg cwd "${HOOK_CWD-}" \
+    '{session_id:$sid, transcript_path:$tx} + (if $cwd != "" then {cwd:$cwd} else {} end)' \
     | bash "$SCRIPT_DIR/hooks/stop-title.sh" || true
 }
 # run_apply <session_title> → prints the hook's stdout
@@ -126,6 +134,16 @@ grep -q '\[--safe-mode\]' "$STUB_LOG" && grep -q '\[--tools\] \[\]' "$STUB_LOG" 
   && report PASS "lean flags used (--tools \"\", --safe-mode, json output)" || report FAIL "lean flags missing: $(head -1 "$STUB_LOG")"
 grep -q '^LATEST: fix the logout redirect$' "$STUB_LOG" \
   && report PASS "dialog sent to model contains LATEST" || report FAIL "dialog: $(cat "$STUB_LOG")"
+
+new_session unterminated
+human "fix the logout redirect" p1
+# A write that was cut short leaves the last line without its newline.
+printf '%s' '{"type":"assistant","message":{"model":"claude-opus-5-5","content":[{"type":"text","text":"on it"}]}}' >> "$TX"
+STUB_TITLE="Fix logout redirect" run_live "fix the logout redirect" p1
+check "unterminated last line: title on its own line" "Fix logout redirect" "$(last_title)"
+# Line by line, like Claude Code reads it (jq alone accepts two objects on one line).
+check "unterminated last line: every line parses on its own" "ok ok ok" \
+  "$(jq -R -r 'fromjson? | "ok"' "$TX" | tr '\n' ' ' | sed 's/ $//')"
 
 new_session turn1
 # Turn 1 of a new session: transcript empty, no prompt_id (older CC) → PROMPT used.
@@ -197,6 +215,52 @@ reply "done with task two"
 STUB_TITLE="Task two" run_stop
 check "throttled request then ack: Stop catches up" "Task two" "$(last_title)"
 
+new_session notask
+human "hi" p1
+STUB_TITLE="SKIP" run_live "hi" p1
+check "no task yet (SKIP): nothing written" "0" "$(title_count)"
+check "no task yet: message counted as seen" "1" "$(state_get .lastHumanCount)"
+check "no task yet: no title recorded" "" "$(state_get .latest)"
+reply "Hi! What would you like to work on?"
+STUB_TITLE="should-not-write" run_stop
+check "no task yet: Stop doesn't retry the same message" "1" "$(calls)"
+check "no task yet: apply-title hands Claude Code nothing" "" "$(run_apply "")"
+human "fix the logout redirect" p2
+STUB_TITLE="Fix logout redirect" run_live "fix the logout redirect" p2
+check "first real task after SKIP: named right away" "Fix logout redirect" "$(last_title)"
+
+new_session skipvariants
+human "test" p1
+STUB_TITLE='`skip`.' run_live "test" p1
+check "SKIP in any case or wrapping: nothing written" "0" "$(title_count)"
+human "hello?" p2
+STUB_TITLE='"SKIP"' run_live "hello?" p2
+check "quoted SKIP: nothing written" "0" "$(title_count)"
+check "title merely starting with Skip is a title" "Skip onboarding step" \
+  "$(human "make the onboarding skippable" p3; STUB_TITLE="Skip onboarding step" run_live "make the onboarding skippable" p3; last_title)"
+
+new_session skipkept
+human "refactor auth" p1
+STUB_TITLE="Refactor auth" run_live "refactor auth" p1
+age_state 0
+human "thanks, that's all for now" p2
+STUB_TITLE="SKIP" run_live "thanks, that's all for now" p2
+check "SKIP with a current title: title kept" "Refactor auth" "$(last_title)"
+check "SKIP with a current title: no duplicate record" "1" "$(title_count)"
+check "SKIP with a current title: message counted" "2" "$(state_get .lastHumanCount)"
+
+new_session skipstop
+echo '{"liveUpdate":false}' > "$CLAUDE_PLUGIN_DATA/config.json"
+human "hey"
+reply "Hey! What are we working on?"
+STUB_TITLE="SKIP" run_stop
+check "Stop-only, no task yet: nothing written" "0" "$(title_count)"
+human "write the release notes for 2.1"
+reply "Drafting them now."
+STUB_TITLE="Write 2.1 release notes" run_stop
+check "Stop-only: named once a task arrives" "Write 2.1 release notes" "$(last_title)"
+rm -f "$CLAUDE_PLUGIN_DATA/config.json"
+
 new_session toolong
 human "add csv export with the date range in the file name" p1
 STUB_TITLE="CSV export with date range in filename" STUB_SHORT="CSV export file naming" run_live "x" p1
@@ -209,6 +273,28 @@ new_session stilllong
 human "add csv export with the date range in the file name" p1
 STUB_TITLE="CSV export with date range in filename" STUB_SHORT="CSV export with the date range in the file name" run_live "x" p1
 check "shortening that doesn't shrink: long title kept" "CSV export with date range in filename" "$(last_title)"
+check "shortening that doesn't shrink: asked twice, then gave up" "3" "$(calls)"
+
+new_session twoshorten
+human "add csv export with the date range in the file name" p1
+STUB_TITLE="CSV export with date range in filename" STUB_SHORT="CSV export with date range in name" STUB_SHORT2="CSV export naming" run_live "x" p1
+check "first shortening still too wide: asked once more" "CSV export naming" "$(last_title)"
+check "first shortening still too wide: three calls in all" "3" "$(calls)"
+grep -q '<title>CSV export with date range in name</title>' "$STUB_LOG" \
+  && report PASS "second shorten request starts from the first result" || report FAIL "second shorten request malformed"
+shorten_requests() { awk '/^CALL/ { b = "" } { b = b $0 "\n" } /^END$/ && b ~ /<title>/ { printf "%s", b }' "$STUB_LOG"; }
+shorten_requests | grep -q 'is 38 columns, 8 more than the 30 the status bar fits. Shorten it to at most 30 columns: drop at least one word' \
+  && report PASS "shorten request says how far over it is and asks to drop a word" || report FAIL "shorten request wording"
+
+new_session narrowest
+human "add csv export with the date range in the file name" p1
+STUB_TITLE="CSV export with date range in filename" STUB_SHORT="CSV export with date range in name" STUB_SHORT2="CSV export with the date range in the file name" run_live "x" p1
+check "second shortening wider than the first: narrowest kept" "CSV export with date range in name" "$(last_title)"
+
+new_session shortskip
+human "add csv export with the date range in the file name" p1
+STUB_TITLE="CSV export with date range in filename" STUB_SHORT="SKIP" run_live "x" p1
+check "SKIP as a shortened title: ignored" "CSV export with date range in filename" "$(last_title)"
 
 new_session cjklong
 human "把后台总览页的统计卡片和图表区域布局都重新优化一下" p1
@@ -292,6 +378,48 @@ reply "done too"
 STUB_TITLE="Changed" run_stop
 check "liveUpdate=false: never updated afterwards" "Only once" "$(last_title)"
 rm -f "$CLAUDE_PLUGIN_DATA/config.json"
+
+new_session style
+human "PROJ-88 the login times out" p1
+STUB_TITLE="Fix login timeout" run_live "PROJ-88 the login times out" p1
+grep -q '<rules>' "$STUB_LOG" && report FAIL "no style: rules sent anyway" || report PASS "no style: no rules in the request"
+echo '{"style":"Start with the ticket ID."}' > "$CLAUDE_PLUGIN_DATA/config.json"
+new_session style-config
+human "PROJ-88 the login times out" p1
+STUB_TITLE="PROJ-88 Fix login timeout" run_live "PROJ-88 the login times out" p1
+grep -q '^Start with the ticket ID\.$' "$STUB_LOG" && grep -q '^<rules>$' "$STUB_LOG" \
+  && report PASS "configured style reaches the model" || report FAIL "configured style missing from the request"
+PROJ="$FIX/project"
+mkdir -p "$PROJ/.claude/sub" "$PROJ/src"
+printf 'Team rule: use the Jira key as a prefix.\n' > "$PROJ/.claude/live-title.md"
+new_session style-project
+human "PROJ-88 the login times out" p1
+HOOK_CWD="$PROJ" STUB_TITLE="PROJ-88 Fix login timeout" run_live "PROJ-88 the login times out" p1
+grep -q '^Team rule: use the Jira key as a prefix\.$' "$STUB_LOG" && ! grep -q 'Start with the ticket ID' "$STUB_LOG" \
+  && report PASS "project .claude/live-title.md replaces the configured style" || report FAIL "project style not used"
+new_session style-stop
+human "PROJ-88 the login times out"
+reply "Looking at the session timeout."
+HOOK_CWD="$PROJ" STUB_TITLE="PROJ-88 Fix login timeout" run_stop
+grep -q '^Team rule: use the Jira key as a prefix\.$' "$STUB_LOG" \
+  && report PASS "Stop hook uses the project style too" || report FAIL "Stop hook ignored the project style"
+new_session style-subdir
+human "PROJ-88 the login times out" p1
+CLAUDE_PROJECT_DIR="$PROJ" HOOK_CWD="$PROJ/src" STUB_TITLE="PROJ-88 Fix login timeout" run_live "PROJ-88 the login times out" p1
+grep -q '^Team rule: use the Jira key as a prefix\.$' "$STUB_LOG" \
+  && report PASS "cwd in a subdirectory: project root found via CLAUDE_PROJECT_DIR" || report FAIL "project style lost in a subdirectory"
+rm -rf "$PROJ" "$CLAUDE_PLUGIN_DATA/config.json"
+
+new_session replaylog
+printf '%s' '{"debug":true,"style":"Start with the ticket ID.\nKeep it short."}' > "$CLAUDE_PLUGIN_DATA/config.json"
+human "hi" p1
+STUB_TITLE="SKIP" run_live "hi" p1
+human "PROJ-88 the login times out" p2
+STUB_TITLE="PROJ-88 login timeout" run_live "PROJ-88 the login times out" p2
+EVENTS=$(grep -F '"event":"title-generated"' "$CLAUDE_PLUGIN_DATA/debug.log" | grep -F "\"session_id\":\"$SID\"")
+check "debug: a SKIP is logged as an event too" "SKIP" "$(printf '%s\n' "$EVENTS" | head -1 | jq -r .title)"
+check "debug: the event carries the style in effect" $'Start with the ticket ID.\nKeep it short.' "$(printf '%s\n' "$EVENTS" | tail -1 | jq -r .style)"
+rm -f "$CLAUDE_PLUGIN_DATA/config.json" "$CLAUDE_PLUGIN_DATA/debug.log"
 
 echo ""
 echo "=== stop-title.sh ==="
@@ -409,7 +537,12 @@ STUB_TITLE="Task A" run_live "task a" p1
 age_state 0
 human "task b" p2
 STUB_TITLE="Task B" run_live "task b" p2
-check "no session_title: no output" "" "$(run_apply "")"
+# Claude Code shows its own first-message title (ai-title) in the tab and the
+# statusline's session_name until it holds a custom title; ours never reaches
+# it from the transcript alone.
+OUT=$(run_apply "")
+check "no custom title in Claude Code: sets sessionTitle to latest" \
+  '{"hookSpecificOutput":{"hookEventName":"UserPromptSubmit","sessionTitle":"Task B"}}' "$OUT"
 check "session_title is latest: no output" "" "$(run_apply "Task B")"
 OUT=$(run_apply "Task A")
 check "stale title of ours: sets sessionTitle to latest" \
@@ -427,9 +560,11 @@ new_session applyfast
 human "a" p1
 STUB_TITLE="A" run_live "a" p1
 START=$(now_ms)
-for i in 1 2 3 4 5; do run_apply "A" >/dev/null; done
-MS=$(( ($(now_ms) - START) / 5 ))
+for i in 1 2 3 4 5; do run_apply "A" >/dev/null; run_apply "" >/dev/null; done
+MS=$(( ($(now_ms) - START) / 10 ))
 (( MS < 150 )) && report PASS "apply-title.sh averages ${MS}ms" || report FAIL "apply-title.sh too slow: ${MS}ms"
+new_session applynew
+check "brand-new session, no custom title: no output" "" "$(run_apply "")"
 
 echo ""
 echo "================================"

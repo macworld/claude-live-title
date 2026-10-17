@@ -1,0 +1,2 @@
+{"type":"user","origin":{"kind":"human"},"promptSource":"typed","message":{"role":"user","content":"the CSV export drops the last row when a report has more than 1000 rows"}}
+{"type":"assistant","message":{"model":"claude-opus-5-5","content":[{"type":"text","text":"The paging loop stops one row early: it uses < where it needs <=."}]}}

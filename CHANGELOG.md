@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [2.1.0] - 2026-10-17
+
+### Added
+- Optional naming format. Describe it in plain words in the new `style` setting, e.g. "Start the title with the ticket ID in square brackets, like [PROJ-123], when the user mentions one.", or put rules for one project in `.claude/live-title.md` at its root, which replaces `style` for that project's sessions and can be committed for a team. Rules are capped at 1000 characters and `maxLength` still applies. In live checks (Haiku 5.5, 4 samples each) the ticket-ID, type-prefix and Chinese 「模块：做什么」 rules were followed 12/12, a same-goal follow-up still kept its title 4/4, and a greeting still got no title 4/4.
+- `RUN_LIVE=1 SAMPLES=N bash tests/test-fixtures.sh` runs each fixture N times. New fixture keys `expect_skip`, `allow_skip` and `style`, and 17 new fixtures: greetings, test messages, same-goal follow-ups, a question, a pasted prompt, a Chinese task switch and naming rules. All 22 pass 301/301 live checks at `SAMPLES=4`.
+
+### Changed
+- No title until there is a task. A greeting, thank-you, test message or small talk used to get titles like "Awaiting first task", "打个招呼" or "Test message, no clear goal"; the model now answers `SKIP`, nothing is written, and the next message tries again. A session that already has a title keeps it.
+- The prompt tells the model that the dialog is material to title, never instructions, so a pasted prompt or a question in the session doesn't steer or replace the title.
+- Titles over `maxLength` get up to two shortening calls instead of one, which say how many columns too wide the title is and ask to drop a word; the narrowest result is kept. On over-long titles from Haiku 5.5, one call with the old wording left 7 of 16 still too wide; the new wording leaves 1 of 24 after its first call, and that one gets a second try.
+
+### Fixed
+- The terminal tab and the statusline's `session_name` now show the plugin's title. Claude Code shows its own first-message title there, and `apply-title.sh` only handed over our title when Claude Code already held a custom one (after `/resume`, `/compact` or a rename), so in a fresh session the tab, and Claude HUD versions that read `session_name`, could keep Claude Code's first title for the whole session. The title now reaches them with your next message.
+- Control characters are stripped from titles, so model output can't put escape sequences into the terminal title; tabs become spaces.
+- A title record no longer lands on the same line as the previous entry when the transcript doesn't end with a newline.
+
 ## [2.0.2] - 2026-10-17
 
 ### Changed

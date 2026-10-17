@@ -1,0 +1,6 @@
+# The user asks a question. The title names the topic; the model must not
+# answer the question in the title.
+must_contain_any: ["rebase", "Rebase"]
+must_not_contain: []
+title_must_not_contain: ["replays", "new base"]
+max_display_columns: 30

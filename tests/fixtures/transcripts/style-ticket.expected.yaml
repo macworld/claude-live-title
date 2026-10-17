@@ -1,0 +1,6 @@
+# The ticket ID is mentioned in passing; the user's rule puts it first, in brackets.
+must_contain_any: ["[PROJ-1423]"]
+must_not_contain: []
+title_must_not_contain: []
+max_display_columns: 30
+style: "Start the title with the ticket ID in square brackets, like [PROJ-123], when the user mentions one."

@@ -11,18 +11,27 @@
 
 ## 为什么需要它？
 
-Claude Code 默认用随机 slug（如 `elegant-chasing-eich`）作为会话名。根据第一条消息起标题能好一些，但会话会往前走：你从修登录 Bug 开始，最后可能在重构认证中间件。Live Title 让每个会话的标题始终对应它**当前**在做的事。
+Claude Code 会根据你的第一条消息给会话起标题，之后就不再改。但会话会往前走：你从排查一个分页 Bug 开始，最后可能在改造所有列表接口。Live Title 让每个会话的标题始终对应它**当前**在做的事。
 
-- **第一句话就有标题。** 描述一个 Bug，会话立刻叫"排查订单列表翻页重复问题"，而不是一串随机名字。
-- **任务变了，标题跟着变。** 从修 Bug 转到"把列表接口都改成游标分页"，标题随之更新；回一句"好，开始吧"，标题保持不动。
-- **随时找回。** 在多个标签页、tmux 或分屏里同时开着几个会话，看一眼状态栏就知道哪个是哪个、上次做到哪；在 `/resume` 里，以前的会话按标题列出。
+| 你说的话 | Claude Code 的标题 | Live Title |
+|---|---|---|
+| 用户反馈订单列表翻到第二页，会看到和第一页重复的订单，帮我查一下 | 订单列表分页重复订单 | 订单列表翻页重复问题排查 |
+| 干脆把所有列表接口都改成游标分页吧 | 订单列表分页重复订单 | 所有列表接口改用游标分页 |
+| 好，开始吧 | 订单列表分页重复订单 | 所有列表接口改用游标分页 |
 
-演示里的标题都是插件针对这些消息实际生成的。状态栏是开启了 `showSessionName` 的 [Claude HUD](#配合-claude-hud-使用)。
+- **有了任务才起标题。** 描述一个 Bug，会话就以它命名；只说一句"你好"或发条测试消息，会话先不命名，等有了任务再起。
+- **任务变了，标题跟着变。** 工作换了方向，标题随之更新；回一句"好，开始吧"，标题保持不动。
+- **随时找回。** 在多个标签页、tmux 或分屏里同时开着几个会话，看一眼标签页或状态栏就知道哪个是哪个；在 `/resume` 里，以前的会话按标题列出。
+- **想要固定格式也可以。** 可选的命名规则，比如标题以工单号开头，对所有会话生效或按项目单独设置。
+
+表格和演示里的标题都是 Claude Code 和插件针对这些消息实际生成的。演示里的状态栏是开启了 `showSessionName` 的 [Claude HUD](#配合-claude-hud-使用)。
 
 ## 特性
 
 - **跟着当前任务走** — 你换了一个任务，标题也跟着换
 - **稳定** — 还在做同一件事时标题不动；回一句"好""继续""ok"不会让标题被改写
+- **等有了任务再起名** — 打招呼或测试消息不会生成标题，你提出要做的事之后才命名
+- **自定义命名格式** — 用一句话写下规则，比如工单号开头、类型前缀，可全局设置也可按项目设置（见[命名格式](#命名格式)）
 - **只看你说的话** — 后台任务通知、子 agent 的回报、skill 说明、压缩摘要都不算
 - **出错不乱写** — 账号用量到达上限或 API 出错时什么都不写，插件暂停一会儿再试
 - **尊重你起的名字** — 用 `/rename` 或 `--name` 命名过的会话，插件不再改动
@@ -36,7 +45,7 @@ Claude Code 默认用随机 slug（如 `elegant-chasing-eich`）作为会话名�
 
 1. **UserPromptSubmit（异步）** — 你发送消息时，在 Claude 回复的同时生成新标题。每 `throttleInterval` 秒最多一次，被跳过的消息由 Stop hook 补上。
 2. **Stop（异步）** — 每次回复结束后运行。会话还没有标题时起一个；补上被节流跳过的消息；长时间自主运行时每 15 分钟刷新一次；如果 Claude Code 把旧标题写回了 transcript，就恢复成最新的。
-3. **UserPromptSubmit（同步）** — `/resume`、`/compact` 或改名之后，Claude Code 会自己保留一份标题，并不断写回 transcript。这个 hook 通过官方的 `sessionTitle` 字段把最新标题交给 Claude Code，让两边保持一致。它不调用模型，大约 20 ms 完成。
+3. **UserPromptSubmit（同步）** — Claude Code 自己保留一份标题：终端标签页和状态栏显示的是这一份，它也会被写回 transcript。这个 hook 通过官方的 `sessionTitle` 字段把最新标题交给 Claude Code，让两边保持一致。它不调用模型，大约 20 ms 完成。
 
 模型（默认 Haiku）看到的是一份简短的会话摘要：
 
@@ -48,7 +57,9 @@ Claude Code 默认用随机 slug（如 `elegant-chasing-eich`）作为会话名�
 
 过长的消息只保留开头和结尾。Claude 的回复会先清洗：去掉代码块、行内代码、堆栈帧和 shell 提示符行（规则在 `hooks/lib/sanitize-line-rules.tsv`），剩下的文字太少就整段不用。
 
-模型调用通过 `claude -p` 进行，不带工具、不保存会话。如果返回的标题超过 `maxLength`，会再调用一次让它缩短。结果作为 `custom-title` 记录写入 transcript。
+模型只把对话当作要起标题的材料，从不当作指令，所以你贴进会话的提示词不会左右标题。如果你的消息里还没有任务（打招呼、测试消息、闲聊），模型回答 `SKIP`，什么都不写。
+
+模型调用通过 `claude -p` 进行，不带工具、不保存会话。如果返回的标题超过 `maxLength`，最多再调用两次让它缩短。结果作为 `custom-title` 记录写入 transcript。
 
 ```mermaid
 flowchart LR
@@ -57,7 +68,7 @@ flowchart LR
     B -->|是| E["CURRENT_TITLE + FIRST +<br/>EARLIER + LATEST + CLAUDE"]
     E --> F[Haiku 生成标题]
     F --> G[追加 custom-title<br/>到 transcript]
-    G --> H[HUD 在状态栏<br/>显示标题]
+    G --> H[显示在 /resume、<br/>标签页和状态栏]
 ```
 
 ## 安装
@@ -66,11 +77,11 @@ flowchart LR
 
 ### 从 Anthropic 官方目录安装（推荐）
 
-已收录在 [`claude-plugins-community`](https://github.com/anthropics/claude-plugins-community)。官方目录每周批量同步一次，所以那边的版本可能比本仓库晚几天。
+已收录在 [`claude-plugins-community`](https://github.com/anthropics/claude-plugins-community)，用的还是旧名 `claude-live-title`。每个新版本都要先过 Anthropic 的审核，所以那边的版本可能比本仓库旧。
 
 ```
 /plugin marketplace add anthropics/claude-plugins-community
-/plugin install live-title@claude-plugins-community
+/plugin install claude-live-title@claude-community
 ```
 
 ### 从本仓库直接安装（永远最新）
@@ -94,7 +105,7 @@ claude plugin marketplace update claude-live-title
 claude plugin install live-title@claude-live-title
 ```
 
-如果当初是从官方社区目录安装的，把 `@claude-live-title` 换成 `@claude-plugins-community`。
+如果当初是从官方社区目录安装的，不用重装：那边的条目还是旧名。
 
 <details>
 <summary><strong>Linux 上安装报 <code>EXDEV: cross-device link not permitted</code>？</strong></summary>
@@ -151,6 +162,10 @@ mkdir -p ~/.cache/tmp && TMPDIR=~/.cache/tmp claude
   // 设为 false：第一次回复后起一个标题，之后不再改
   "liveUpdate": true,
 
+  // 你的命名规则，用自然语言写（默认：无）
+  // 项目里的 .claude/live-title.md 会在该项目中取代这一项
+  "style": "",
+
   // 在插件数据目录写调试日志（默认：false）
   "debug": false
 }
@@ -168,9 +183,54 @@ mkdir -p ~/.cache/tmp && TMPDIR=~/.cache/tmp claude
 }
 ```
 
+### 命名格式
+
+默认的标题是一个简短的短语。想要固定格式，就在 `style` 里描述它：
+
+```json
+{
+  "style": "标题格式：「模块：做什么」，比如「订单：导出按钮无响应」。"
+}
+```
+
+规则用中文或英文写都可以。比如这一条：
+
+```json
+{
+  "style": "Start the title with the ticket ID in square brackets, like [PROJ-123], when the user mentions one."
+}
+```
+
+`PROJ-1423: the login form accepts an empty password, fix it` 得到的标题是 `[PROJ-1423] Fix empty password`。
+
+只想给某个项目设规则，就写在项目根目录的 `.claude/live-title.md` 里。它会在这个项目的会话中取代 `style`，提交到仓库后整个团队用同一种格式。另一条好用的规则：
+
+- `Begin the title with one of feat:, fix:, docs:, refactor:, chore: and then a short lowercase summary.`
+
+规则最长 1000 个字符，`maxLength` 照样生效。
+
+## 标题显示在哪里
+
+- **`/resume`** 按标题列出以前的会话。
+- **终端标签页。** Claude Code 会把会话标题设为终端标题（在 tmux 里是 pane 标题），不用额外设置。
+- **你的状态栏。** Claude Code 会把标题作为 `session_name` 传给状态栏命令。最简单的显示方式，写在 `~/.claude/settings.json` 里：
+
+  ```json
+  {
+    "statusLine": {
+      "type": "command",
+      "command": "jq -r '.session_name // empty'"
+    }
+  }
+  ```
+
+- **[Claude HUD](#配合-claude-hud-使用)**，需开启 `showSessionName`。
+
+标签页和 `session_name` 要等你发下一条消息时才换上新标题，因为 Claude Code 只在这个时机接受插件给的标题。插件的第一个标题到来之前，它们显示 Claude Code 自己起的标题。
+
 ## 配合 Claude HUD 使用
 
-[Live Title](https://github.com/macworld/claude-live-title) 可与 [Claude HUD](https://github.com/jarrodwatts/claude-hud) 无缝配合。生成的标题会自动显示在 HUD 状态栏中。
+[Live Title](https://github.com/macworld/claude-live-title) 可与 [Claude HUD](https://github.com/jarrodwatts/claude-hud) 配合使用：会话标题会显示在 HUD 状态栏中。
 
 ### 设置步骤
 
@@ -200,11 +260,11 @@ mkdir -p ~/.cache/tmp && TMPDIR=~/.cache/tmp claude
    }
    ```
 
-3. 开始新对话 — 发送第一条消息后，标题就会出现在状态栏中，并随对话演进实时更新。
+3. 开始新对话。状态栏会显示会话标题，并随工作推进更新。
 
 ### 集成原理
 
-Live Title 将 `custom-title` 记录写入会话 transcript 文件。Claude HUD 读取这些记录并在状态栏显示最新标题，替代默认的随机 slug。标题会随对话推进实时更新。
+Live Title 把 `custom-title` 记录写入会话 transcript，并把最新标题交给 Claude Code。新版 HUD 显示的是 Claude Code 传给状态栏的 `session_name`，它在你发下一条消息时换上新标题；旧版 HUD 直接从 transcript 读取 `custom-title` 记录。
 
 ## 系统要求
 
@@ -213,6 +273,17 @@ Live Title 将 `custom-title` 记录写入会话 transcript 文件。Claude HUD 
 - Linux 或 macOS（Windows 用户需要 Git Bash 或 WSL）
 
 ## 常见问题
+
+**Claude Code 不是已经会给会话起名了吗？**
+它根据第一条消息起标题，之后整个会话都用这一个。Live Title 会在工作换方向时给会话改名，还可以按你设定的格式起名。
+
+**为什么标签页上的新标题晚一条消息才出现？**
+Claude Code 只在你发送消息时接受插件给的标题。标题是在 Claude 回复期间生成的，所以标签页和状态栏要等你发下一条消息时才换上。`/resume` 读取 transcript，能立刻看到。
+
+## 故障排查
+
+**会话没有标题？**
+打招呼或测试消息不会生成标题，你提出要做的事之后，会话才会命名。
 
 **标题没有出现？**
 1. 确认插件已安装并启用：在已启用插件列表中查找 `live-title`
@@ -251,6 +322,9 @@ for t in tests/test-*.sh; do bash "$t"; done
 
 # 再用真实模型检查 fixture（花费不到一美分）
 RUN_LIVE=1 bash tests/test-fixtures.sh
+
+# 每个 fixture 跑 4 次，抓出偶尔才出错的标题
+RUN_LIVE=1 SAMPLES=4 bash tests/test-fixtures.sh
 ```
 
 ## 更多

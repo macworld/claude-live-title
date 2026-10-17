@@ -6,13 +6,13 @@
   },
   "metadata": {
     "description": "Auto-generate meaningful session titles in real-time",
-    "version": "2.0.2"
+    "version": "2.1.0"
   },
   "plugins": [
     {
       "name": "live-title",
       "source": "./",
-      "description": "Auto-generate meaningful session titles in real-time, replacing random slugs. Multilingual, follows task switches, safe on usage limits.",
+      "description": "Session titles that follow what you're working on now, not just your first message. Multilingual, optional naming format, safe on usage limits.",
       "homepage": "https://github.com/macworld/claude-live-title",
       "category": "productivity",
       "tags": ["title", "session", "rename", "live-update", "multilingual", "statusline", "productivity", "claude-code"]

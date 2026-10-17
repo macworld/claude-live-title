@@ -2,7 +2,8 @@
 # stop-title.sh — Stop hook (async), runs after every Claude reply
 #   1. Restores our latest title if Claude Code re-appended an older one
 #      during the turn, so the idle session shows the right name.
-#   2. Generates a title when the session has none yet, when user messages
+#   2. Generates a title when the session has none yet (and a message came
+#      in since the model last found no task in it), when user messages
 #      arrived that the live hook skipped (throttle; bare "ok"/"继续" don't
 #      count), or every REFRESH_INTERVAL of activity so long autonomous runs
 #      stay current.
@@ -19,12 +20,13 @@ source "${SCRIPT_DIR}/lib/common.sh"
 detect_platform
 INPUT=$(cat)
 exec >/dev/null
-IFS=$'\x1f' read -r SESSION_ID TRANSCRIPT_PATH <<< "$(printf '%s' "$INPUT" | jq -r \
-  '[(.session_id // ""), (.transcript_path // "")] | join("\u001f")')"
+IFS=$'\x1f' read -r SESSION_ID TRANSCRIPT_PATH CWD <<< "$(printf '%s' "$INPUT" | jq -r \
+  '[(.session_id // ""), (.transcript_path // ""), (.cwd // "")] | join("\u001f")')"
 
 [[ -z "$SESSION_ID" || -z "$TRANSCRIPT_PATH" || ! -f "$TRANSCRIPT_PATH" ]] && exit 0
 
 load_config
+load_project_style "$CWD"
 state_init "$(sanitize_session_id "$SESSION_ID")"
 is_pinned && exit 0
 log "stop-title triggered: session=$SESSION_ID"
@@ -55,7 +57,8 @@ maybe_cleanup_state
 NOW=$(date +%s)
 TRIGGER=""
 if [[ -z "$ST_LATEST" ]]; then
-  TRIGGER="first"
+  # Messages the model found no task in are counted; only new ones retry.
+  if (( HUMAN_COUNT > ST_LAST_HUMAN )); then TRIGGER="first"; fi
 elif [[ "$LIVE_UPDATE" != "true" ]]; then
   exit 0
 else

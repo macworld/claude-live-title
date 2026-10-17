@@ -1,0 +1,6 @@
+# Refinements of the same export never narrow the title to the latest
+# detail (date format, file name).
+must_contain_any: []
+must_not_contain: []
+title_must_not_contain: []
+keep_current_title: true

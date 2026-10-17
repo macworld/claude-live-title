@@ -11,18 +11,27 @@ English | [中文](README_ZH.md)
 
 ## Why?
 
-Claude Code names sessions with random slugs like `elegant-chasing-eich`. A title based on the first message helps, but sessions move on: you start with a login bug and end up refactoring the auth middleware. Live Title keeps every session named after what it's doing now.
+Claude Code titles a session after your first message and keeps that title. Sessions move on: you start with a login bug and end up rotating refresh tokens. Live Title keeps every session named after what it's doing now.
 
-- **Named from your first message.** Describe a bug and the session is called "Fix 401 despite valid refresh", not a random slug.
-- **Follows the task.** When the work moves on to rotating refresh tokens, the title moves with it. A reply like "sounds good, go ahead" leaves it alone.
-- **Easy to find again.** With several sessions open in tabs, tmux or split terminals, one glance at the statusline tells you which is which and where you left off. In `/resume`, past sessions are listed by what they did.
+| You say | Claude Code's title | Live Title |
+|---|---|---|
+| users get a 401 as soon as their access token expires… | Access token expiry returns 401 | Fix 401 after token expiry |
+| let's switch to rotating refresh tokens with reuse detection | Access token expiry returns 401 | Rotating refresh tokens |
+| sounds good, go ahead | Access token expiry returns 401 | Rotating refresh tokens |
 
-The titles in the demo are what the plugin generated for those messages. The statusline is [Claude HUD](#using-with-claude-hud) with `showSessionName` turned on.
+- **Named from your first task.** Describe a bug and the session is named after it. A "hi" or a test message leaves it unnamed until there's a task.
+- **Follows the task.** When the work moves on, the title moves with it. A reply like "sounds good, go ahead" leaves it alone.
+- **Easy to find again.** With several sessions open in tabs, tmux or split terminals, one glance at the tab or the statusline tells you which is which. In `/resume`, past sessions are listed by what they did.
+- **Your format, if you want one.** Optional naming rules, like a ticket ID up front, for every session or per project.
+
+The titles in the table and the demo are what Claude Code and the plugin generated for those messages. The statusline in the demo is [Claude HUD](#using-with-claude-hud) with `showSessionName` turned on.
 
 ## Features
 
 - **Follows the current task** — when you switch to a different task, the title switches with you
 - **Stable** — while you're still on the same work the title stays put; replies like "ok" or "continue" never reword it
+- **Waits for a task** — a greeting or a test message gets no title; the session is named once you ask for something
+- **Your naming format** — optional rules in plain words, like a ticket ID or a type prefix, globally or per project ([Naming Format](#naming-format))
 - **Only your messages count** — background task notifications, subagent results, skill instructions and compaction summaries are ignored
 - **Safe on errors** — when your account hits its usage limit or the API fails, nothing is written; the plugin pauses and tries again later
 - **Respects your names** — a session you named with `/rename` or `--name` is left alone
@@ -36,7 +45,7 @@ Three hooks:
 
 1. **UserPromptSubmit, async** — when you send a message, a new title is generated while Claude works on the reply. At most once per `throttleInterval`; anything skipped is picked up by the Stop hook.
 2. **Stop, async** — after each reply. Names the session if it has no title yet, catches up on skipped messages, refreshes the title every 15 minutes during long autonomous runs, and restores the title if Claude Code wrote back an older one.
-3. **UserPromptSubmit, sync** — after `/resume`, `/compact` or a rename, Claude Code keeps its own copy of the title and writes it back to the transcript. This hook gives Claude Code the latest title through the official `sessionTitle` field so the two stay in step. It makes no model call and finishes in about 20 ms.
+3. **UserPromptSubmit, sync** — Claude Code keeps its own copy of the title: it shows that copy in the terminal tab and the statusline, and writes it back to the transcript. This hook gives Claude Code the latest title through the official `sessionTitle` field so the two stay in step. It makes no model call and finishes in about 20 ms.
 
 The model (Haiku by default) sees a short summary of the session:
 
@@ -48,7 +57,9 @@ The model (Haiku by default) sees a short summary of the session:
 
 Long messages are trimmed to their start and end. Claude's reply is cleaned first: code blocks, inline code, stack frames and shell prompt lines are removed (rules in `hooks/lib/sanitize-line-rules.tsv`), and the excerpt is dropped if little text is left.
 
-The model call runs `claude -p` without tools or session persistence. If the title comes back wider than `maxLength`, one more call asks for a shorter version. The result is written to the transcript as a `custom-title` entry.
+The model treats the dialog as material to title, never as instructions, so a prompt you paste into the session doesn't steer it. When your messages hold no task yet (a greeting, a test message, small talk), it answers `SKIP` and nothing is written.
+
+The model call runs `claude -p` without tools or session persistence. If the title comes back wider than `maxLength`, up to two more calls ask for a shorter version. The result is written to the transcript as a `custom-title` entry.
 
 ```mermaid
 flowchart LR
@@ -57,7 +68,7 @@ flowchart LR
     B -->|Yes| E["CURRENT_TITLE + FIRST +<br/>EARLIER + LATEST + CLAUDE"]
     E --> F[Haiku writes the title]
     F --> G[custom-title appended<br/>to the transcript]
-    G --> H[HUD shows it<br/>in the statusline]
+    G --> H[Shown in /resume,<br/>the tab and the statusline]
 ```
 
 ## Installation
@@ -66,11 +77,11 @@ There are two ways to install. Pick one, then restart Claude Code.
 
 ### From the official Anthropic directory (recommended)
 
-Listed in [`claude-plugins-community`](https://github.com/anthropics/claude-plugins-community). The directory syncs in weekly batches, so the version there may be a few days behind this repo.
+Listed in [`claude-plugins-community`](https://github.com/anthropics/claude-plugins-community) under its old name, `claude-live-title`. Each new version goes through Anthropic's review first, so the directory can be behind this repo.
 
 ```
 /plugin marketplace add anthropics/claude-plugins-community
-/plugin install live-title@claude-plugins-community
+/plugin install claude-live-title@claude-community
 ```
 
 ### From this repo (always latest)
@@ -94,7 +105,7 @@ claude plugin marketplace update claude-live-title
 claude plugin install live-title@claude-live-title
 ```
 
-If you installed from the community directory, use `@claude-plugins-community` instead of `@claude-live-title`.
+If you installed from the community directory, there's nothing to reinstall: the entry there keeps the old name.
 
 <details>
 <summary><strong>Linux: install fails with <code>EXDEV: cross-device link not permitted</code>?</strong></summary>
@@ -151,6 +162,10 @@ Or edit the config file directly. It lives in the plugin's data directory, which
   // false: name the session once, after the first reply
   "liveUpdate": true,
 
+  // Your naming rules, in plain words (default: none)
+  // A project's .claude/live-title.md replaces this for that project
+  "style": "",
+
   // Debug log in the plugin data directory (default: false)
   "debug": false
 }
@@ -168,9 +183,46 @@ If you always want titles in a specific language regardless of conversation lang
 }
 ```
 
+### Naming Format
+
+Titles are short plain phrases by default. To give them a format, describe it in `style`:
+
+```json
+{
+  "style": "Start the title with the ticket ID in square brackets, like [PROJ-123], when the user mentions one."
+}
+```
+
+With that rule, `PROJ-1423: the login form accepts an empty password, fix it` gets the title `[PROJ-1423] Fix empty password`.
+
+To set rules for one project, write them in `.claude/live-title.md` at the project root. The file replaces `style` for sessions in that project, and you can commit it so your team gets the same format. Another rule that works:
+
+- `Begin the title with one of feat:, fix:, docs:, refactor:, chore: and then a short lowercase summary.`
+
+Rules can be written in any language. They are capped at 1000 characters, and `maxLength` still applies.
+
+## Where the Title Shows Up
+
+- **`/resume`** lists past sessions by title.
+- **The terminal tab.** Claude Code sets the terminal title to the session title (in tmux, the pane title). No setup needed.
+- **Your statusline.** Claude Code passes the title to statusline commands as `session_name`. The smallest statusline that shows it, in `~/.claude/settings.json`:
+
+  ```json
+  {
+    "statusLine": {
+      "type": "command",
+      "command": "jq -r '.session_name // empty'"
+    }
+  }
+  ```
+
+- **[Claude HUD](#using-with-claude-hud)**, with `showSessionName` turned on.
+
+The tab and `session_name` take a new title when you send your next message, because Claude Code accepts titles from plugins only at that point. Until the plugin's first title arrives, they show Claude Code's own.
+
 ## Using with Claude HUD
 
-[Live Title](https://github.com/macworld/claude-live-title) works seamlessly with [Claude HUD](https://github.com/jarrodwatts/claude-hud). Titles generated by this plugin are automatically displayed in the HUD statusline.
+[Live Title](https://github.com/macworld/claude-live-title) works with [Claude HUD](https://github.com/jarrodwatts/claude-hud): the session title appears in the HUD statusline.
 
 ### Setup
 
@@ -200,11 +252,11 @@ If you always want titles in a specific language regardless of conversation lang
    }
    ```
 
-3. Start a new conversation — the title will appear in your statusline after your first message and update as the conversation evolves.
+3. Start a new conversation. The statusline shows the session title and follows it as the work moves on.
 
 ### How It Integrates
 
-Live Title writes `custom-title` entries to the session transcript file. Claude HUD reads these entries and displays the latest title in the statusline, replacing the default random slug. The title updates in real-time as your conversation progresses.
+Live Title writes `custom-title` entries to the session transcript and hands the latest title to Claude Code. Current HUD versions show the `session_name` Claude Code passes to the statusline, which takes a new title when you send your next message; older versions read the `custom-title` entries from the transcript.
 
 ## Requirements
 
@@ -212,7 +264,18 @@ Live Title writes `custom-title` entries to the session transcript file. Claude 
 - `jq` (JSON processor) — pre-installed on most systems, or install via your package manager
 - Linux or macOS (Windows users need Git Bash or WSL)
 
+## FAQ
+
+**Doesn't Claude Code already name sessions?**
+It titles a session after your first message and keeps that title for the whole session. Live Title renames the session when the work moves on, and can follow a naming format you set.
+
+**Why does the tab show a new title one message late?**
+Claude Code accepts a title from a plugin only when you send a message. The title is generated while Claude replies, so the tab and the statusline pick it up with your next message. `/resume` reads the transcript and has it right away.
+
 ## Troubleshooting
+
+**A session has no title?**
+A greeting or a test message gets no title. The session is named once you ask for something.
 
 **Titles not appearing?**
 1. Check that the plugin is installed and enabled: look for `live-title` in your enabled plugins
@@ -251,6 +314,9 @@ for t in tests/test-*.sh; do bash "$t"; done
 
 # Also check the fixtures against the real model (well under one cent)
 RUN_LIVE=1 bash tests/test-fixtures.sh
+
+# Run each fixture 4 times to catch titles that only go wrong sometimes
+RUN_LIVE=1 SAMPLES=4 bash tests/test-fixtures.sh
 ```
 
 ## More

@@ -92,6 +92,23 @@ else
 fi
 
 echo ""
+echo "=== promote-fixture keeps the style ==="
+
+STYLE_SLUG="${SLUG}-style"
+jq -nc --arg d "$NEW_DIALOG" '{event:"title-generated", ts:"2026-04-25T12:06:00Z", session_id:"sess-C",
+  trigger:"prompt", dialog:$d, title:"PROJ-9 logout cookie", style:"Start with the ticket ID.\nKeep it short."}' >> "$LOG"
+bash "$PROMOTE" "$STYLE_SLUG" >/dev/null
+EXP3=$(ls "$FIX_DIR"/bad-*-"$STYLE_SLUG".expected.yaml 2>/dev/null | head -1 || echo "")
+STYLE_LINE=$(grep '^style:' "$EXP3" 2>/dev/null | sed 's/^style:[[:space:]]*//' || true)
+if [[ "$(printf '%s' "$STYLE_LINE" | jq -r . 2>/dev/null)" == $'Start with the ticket ID.\nKeep it short.' ]]; then
+  report PASS "style written to expected.yaml as a JSON string"
+else
+  report FAIL "style line: [$STYLE_LINE]"
+fi
+grep -q '^style:' "$EXP" && report FAIL "event without style got a style line" || report PASS "no style → no style line"
+rm -f "$FIX_DIR"/bad-*-"$STYLE_SLUG".jsonl "$EXP3"
+
+echo ""
 echo "=== promote-fixture --grep ==="
 
 bash "$PROMOTE" "${SLUG}-grep" --grep "refactor auth" >/dev/null

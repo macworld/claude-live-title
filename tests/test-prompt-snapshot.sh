@@ -89,6 +89,27 @@ ACT=$(CLAUDE_LIVE_TITLE_PRINT_DIALOG=1 generate_title "$DIALOG")
 MAX_LENGTH=30
 
 echo ""
+echo "=== style (custom naming rules) ==="
+
+STYLE=""
+ACT=$(CLAUDE_LIVE_TITLE_PRINT_DIALOG=1 generate_title "$DIALOG")
+[[ "$ACT" != *"<rules>"* ]] \
+  && report PASS "no style → no rules section" \
+  || report FAIL "rules section rendered without a style"
+
+STYLE=$'Start with the ticket ID, like PROJ-123.\nThen a short summary.'
+ACT=$(CLAUDE_LIVE_TITLE_PRINT_DIALOG=1 generate_title "$DIALOG")
+[[ "$ACT" == *$'<rules>\nStart with the ticket ID, like PROJ-123.\nThen a short summary.\n</rules>'* ]] \
+  && report PASS "style → rules section with the user's text, lines kept" \
+  || report FAIL "rules section missing or altered"
+RULES_AT=${ACT%%<rules>*}
+LENGTH_AT=${ACT%%Length: aim for*}
+(( ${#RULES_AT} < ${#LENGTH_AT} )) \
+  && report PASS "rules come before the length limit, which still applies" \
+  || report FAIL "rules placed after the length line"
+STYLE=""
+
+echo ""
 echo "=== dry-run does not invoke claude ==="
 
 # Strip PATH so any actual `claude` invocation would fail; dry-run must

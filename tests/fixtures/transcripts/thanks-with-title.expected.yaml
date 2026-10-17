@@ -1,0 +1,5 @@
+# A thank-you after the work keeps the title (SKIP counts as keeping it).
+must_contain_any: []
+must_not_contain: []
+title_must_not_contain: []
+keep_current_title: true

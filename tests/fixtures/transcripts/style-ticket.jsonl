@@ -1,0 +1,2 @@
+{"type":"user","origin":{"kind":"human"},"promptSource":"typed","message":{"role":"user","content":"the login on staging times out after 30 seconds. this is for ticket PROJ-1423, find out why"}}
+{"type":"assistant","message":{"model":"claude-opus-5-5","content":[{"type":"text","text":"The session middleware waits on a Redis call that has no timeout."}]}}

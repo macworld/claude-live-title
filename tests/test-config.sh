@@ -72,6 +72,50 @@ echo '[1,2]' > "$CONFIG"
 expect "non-object JSON → defaults" "haiku|auto|30|1|5|60|true|false"
 
 echo ""
+echo "=== style (custom naming rules) ==="
+# style_of [project_dir]: STYLE after load_config (+ load_project_style),
+# newlines shown as ⏎ so the comparison stays on one line.
+style_of() {
+  bash -c 'source "$1/hooks/lib/common.sh"; load_config; [[ -n "$2" ]] && load_project_style "$2"
+    printf "%s" "$STYLE" | awk "{ printf \"%s%s\", (NR > 1 ? \"⏎\" : \"\"), \$0 }"' _ "$SCRIPT_DIR" "${1-}"
+}
+check_style() { local d="$1" e="$2" a; a=$(style_of "${3-}"); if [[ "$a" == "$e" ]]; then report PASS "$d"; else report FAIL "$d — expected [$e] got [$a]"; fi; }
+
+rm -f "$CONFIG"
+check_style "no config → no style" ""
+echo '{"style":"Start with the ticket ID, like PROJ-123."}' > "$CONFIG"
+check_style "style string is used" "Start with the ticket ID, like PROJ-123."
+echo '{"style":"- type prefix: feat, fix, docs\n- then a short summary"}' > "$CONFIG"
+check_style "multi-line style keeps its lines" "- type prefix: feat, fix, docs⏎- then a short summary"
+echo '{"style":["not","a","string"]}' > "$CONFIG"
+check_style "non-string style ignored" ""
+echo '{"style":"   \n\t "}' > "$CONFIG"
+check_style "whitespace-only style ignored" ""
+echo '{"style":"Use | pipes and\ttabs","maxLength":40}' > "$CONFIG"
+check_style "style with separators: kept" "Use | pipes and tabs"
+expect "style doesn't disturb the other fields" "haiku|auto|40|1|5|60|true|false"
+jq -n '{style: ("x" * 1500)}' > "$CONFIG"
+check_style "style capped at 1000 characters" "$(printf 'x%.0s' $(seq 1 1000))"
+
+PROJ="$TMP/project"
+mkdir -p "$PROJ/.claude"
+echo '{"style":"Global rule"}' > "$CONFIG"
+check_style "no project file → configured style" "Global rule" "$PROJ"
+printf 'Team rule: start with the Jira key.\nKeep it in English.\n' > "$PROJ/.claude/live-title.md"
+check_style "project .claude/live-title.md replaces the configured style" "Team rule: start with the Jira key.⏎Keep it in English." "$PROJ"
+mkdir -p "$TMP/elsewhere"
+check_style "cwd without a project file → configured style" "Global rule" "$TMP/elsewhere"
+OUT=$(CLAUDE_PROJECT_DIR="$PROJ" style_of "$TMP/elsewhere")
+[[ "$OUT" == "Team rule: start with the Jira key.⏎Keep it in English." ]] \
+  && report PASS "CLAUDE_PROJECT_DIR wins over the hook's cwd" || report FAIL "CLAUDE_PROJECT_DIR ignored — got [$OUT]"
+printf '  \n\n' > "$PROJ/.claude/live-title.md"
+check_style "blank project file → configured style" "Global rule" "$PROJ"
+rm -f "$CONFIG"
+printf 'y%.0s' $(seq 1 1500) > "$PROJ/.claude/live-title.md"
+check_style "project file capped at 1000 characters" "$(printf 'y%.0s' $(seq 1 1000))" "$PROJ"
+rm -rf "$PROJ"
+
+echo ""
 echo "=== legacy migration ==="
 rm -f "$CONFIG"
 mkdir -p "$HOME/.claude/plugins/claude-live-title"

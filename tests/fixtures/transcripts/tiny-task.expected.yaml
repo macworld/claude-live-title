@@ -1,0 +1,5 @@
+# A very short message can still be a task; it must get a title.
+must_contain_any: ["typo", "Typo", "README"]
+must_not_contain: []
+title_must_not_contain: []
+max_display_columns: 30

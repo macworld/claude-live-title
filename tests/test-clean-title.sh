@@ -72,6 +72,16 @@ assert_clean "trailing newline dropped"  $'Fix login\n'                    'Fix 
 assert_clean "Title: + punct + quotes"   '"Title: Fix bug."'               'Fix bug'
 assert_clean "标题: + 「」 + 。"          '标题：「修登录」。'                  '修登录'
 assert_clean "no transformation needed"  '修复 logout 流程'                  '修复 logout 流程'
+assert_clean "tab becomes a space"       $'Fix\tlogin'                     'Fix login'
+
+echo ""
+echo "=== clean_title control characters ==="
+
+# The title ends up in the terminal tab; escape sequences must not reach it.
+assert_clean "ESC and BEL removed"       $'\e]0;Owned\aFix login'          ']0;OwnedFix login'
+assert_clean "ANSI color codes removed"  $'\e[31mFix login\e[0m'           '[31mFix login[0m'
+assert_clean "DEL removed"               $'Fix\x7f login'                  'Fix login'
+assert_clean "CJK bytes survive"         $'修复\x01登录'                     '修复登录'
 
 echo ""
 echo "=== clean_title markdown wrapping ==="

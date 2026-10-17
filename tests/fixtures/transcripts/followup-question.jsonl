@@ -1,0 +1,5 @@
+{"type":"user","origin":{"kind":"human"},"promptSource":"typed","message":{"role":"user","content":"migrate our auth from sessions to JWT"}}
+{"type":"assistant","message":{"model":"claude-opus-5-5","content":[{"type":"text","text":"Replaced express-session with signed JWTs; the refresh token is set as an httpOnly cookie."}]}}
+{"type":"custom-title","customTitle":"Migrate auth to JWT"}
+{"type":"user","origin":{"kind":"human"},"promptSource":"typed","message":{"role":"user","content":"why did you store the refresh token in a cookie instead of localStorage?"}}
+{"type":"assistant","message":{"model":"claude-opus-5-5","content":[{"type":"text","text":"An httpOnly cookie can't be read by injected scripts, so an XSS bug can't steal the refresh token."}]}}

@@ -1,0 +1,6 @@
+# Chinese rules: 「模块：做什么」. The title follows the shape and stays in Chinese.
+must_contain_any: ["：", ":"]
+must_not_contain: []
+title_must_not_contain: ["Export", "export"]
+max_display_columns: 30
+style: "标题格式：「模块：做什么」，比如「订单：导出按钮无响应」。"

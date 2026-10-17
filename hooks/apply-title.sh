@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
 # apply-title.sh — UserPromptSubmit hook (sync, no model call)
 # Keeps Claude Code's in-memory session title in step with the latest title
-# this plugin generated. Once Claude Code holds a title (after compact,
-# resume, attach, or an earlier sync) it re-appends that title to the
-# transcript after every API request, which reverts ours. Only a synchronous
-# UserPromptSubmit hook returning `sessionTitle` can change it, so this
-# script does that and nothing else: it reads one small state file and exits
-# within milliseconds.
+# this plugin generated. Without it Claude Code shows its own first-message
+# title in the terminal tab and the statusline's session_name, and once it
+# holds a title (after compact, resume, attach, or an earlier sync) it
+# re-appends that title to the transcript after every API request, which
+# reverts ours. Only a synchronous UserPromptSubmit hook returning
+# `sessionTitle` can change it, so this script does that and nothing else:
+# it reads one small state file and exits within milliseconds.
 #
 # stdout carries only the JSON reply (plain stdout would be added to Claude's
 # context), and the script always exits 0 (exit 2 would block the prompt).
@@ -23,9 +24,7 @@ main() {
   IFS=$'\x1f' read -r session_id cc_title <<< "$(printf '%s' "$input" | jq -r \
     '[(.session_id // ""), (.session_title // "" | gsub("[\\r\\n]"; " "))] | join("\u001f")')"
 
-  # Fast path: Claude Code holds no custom title, so the titles we append to
-  # the transcript stand on their own.
-  [[ -n "$session_id" && -n "$cc_title" ]] || return 0
+  [[ -n "$session_id" ]] || return 0
 
   local script_dir
   script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -39,8 +38,11 @@ main() {
   # Unknown sessions are bootstrapped by the async hooks, never here.
   [[ "$ST_EXISTS" == "true" ]] || return 0
   [[ "$cc_title" == "$ST_LATEST" ]] && return 0
-  # A title we never generated means the user renamed the session.
-  check_foreign_title "$cc_title" || return 0
+  # A title we never generated means the user renamed the session. With no
+  # custom title, Claude Code is showing its own ai-title; replace that.
+  if [[ -n "$cc_title" ]]; then
+    check_foreign_title "$cc_title" || return 0
+  fi
   [[ -n "$ST_LATEST" ]] || return 0
 
   log "apply: syncing Claude Code title '$cc_title' → '$ST_LATEST'"

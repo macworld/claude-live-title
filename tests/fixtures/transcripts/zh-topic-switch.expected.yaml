@@ -1,0 +1,6 @@
+# The user writes Chinese and moves on to a different task. The title
+# follows the new task and stays in Chinese.
+must_contain_any: ["登录"]
+must_not_contain: []
+title_must_not_contain: ["分页", "Login"]
+max_display_columns: 30

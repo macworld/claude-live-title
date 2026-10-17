@@ -1,0 +1,6 @@
+# With rules on, a same-goal follow-up still keeps the title as it is.
+must_contain_any: []
+must_not_contain: []
+title_must_not_contain: []
+keep_current_title: true
+style: "Begin the title with one of feat:, fix:, docs:, refactor:, chore: and then a short lowercase summary."
