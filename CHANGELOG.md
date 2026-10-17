@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-10-17
+
+### Fixed
+- Usage-limit and API error text no longer becomes the session title. The model call now uses `--output-format json` and checks `is_error`; Claude Code's own error text is rejected even if a CLI version forgets the flag. After a usage-limit error the plugin pauses for 10 minutes (2 minutes after other errors) instead of retrying on every message.
+- Long sessions no longer drift to stale or wrong titles:
+  - Only messages you typed reach the model. Task notifications, subagent hand-backs, messages from other sessions, skill bodies, compaction summaries, slash-command noise and hook feedback are skipped, based on the transcript's `origin` / `isMeta` / `isCompactSummary` / `isSidechain` fields with text rules as a fallback.
+  - Claude Code's synthetic error replies (`isApiErrorMessage`, model `<synthetic>`) and subagent replies are no longer used as the Claude excerpt.
+  - Each message is capped on its own (head and tail kept), so one long paste can't crowd out the latest request.
+- Titles no longer revert after `/resume`, `/compact` or attaching a session. Once Claude Code holds a title it re-appends it to the transcript after every API request; a new sync UserPromptSubmit hook (`apply-title.sh`) hands it the latest title through the official `sessionTitle` field, and the Stop hook restores the latest title when the transcript ends with an older one.
+- Titles you set yourself (`/rename`, `--name`, another tool) are detected and the session is left alone from then on.
+- `liveUpdate: false` in the config was read as `true` (jq `//` treats `false` as missing).
+- The test suite no longer overwrites the real config file.
+
+### Changed
+- Default model alias `haiku` now resolves to Claude Haiku 5.5.
+- New prompt and dialog format: `CURRENT_TITLE` / `FIRST` / `EARLIER` / `LATEST` / `CLAUDE`. The latest message is the strongest signal, a different task replaces the old title instead of being merged into it, and the current title is kept unless the focus or the kind of work changed, so titles don't churn. `language: "auto"` follows the language you write in, not the language of the code or Claude's reply.
+- Bare acknowledgements ("ok", "继续", "yes go ahead") no longer trigger a new title.
+- Titles wider than `maxLength` get one follow-up call asking for a shorter version; the prompt now gives worked examples of column widths.
+- Model calls run with `--tools "" --effort low --safe-mode` (about 1.5K input tokens instead of ~25K), falling back to the basic flag set on CLIs that reject them.
+- Trigger rules: the live hook generates at most once per `throttleInterval` (default 60 s, was 240 s); the Stop hook catches up on skipped messages and refreshes every 15 minutes during long autonomous runs. `throttleMessages` is retired and ignored.
+- `contextMessages.head` defaults to 1 (was 3).
+- State, locks, cooldown markers and the debug log moved from `/tmp` to the plugin data directory. The debug log is mode 600 and rotated at 1 MB; old session state is cleaned up after 30 days. Sessions titled by 1.3 and earlier are picked up through their `/tmp` markers.
+- `clean_title` also strips markdown headings, bold wrapping and curly quotes, and joins multi-line output with spaces.
+
+### Added
+- `tests/test-config.sh` and regression fixtures for the usage-limit, task-switch, system-noise, mixed-language and research-to-implementation cases. `tests/test-entry.sh` now covers the three hooks end to end (76 cases). `UPDATE_SNAPSHOT=1` regenerates the prompt snapshot.
+- `bin/promote-fixture.sh` reads the debug log from the plugin data directory and understands both the new and the pre-1.4 dialog format.
+
 ## [1.3.0] - 2026-04-25
 
 ### Added

@@ -9,48 +9,49 @@
 
 ## 为什么需要它？
 
-Claude Code 默认用随机 slug（如 `elegant-chasing-eich`）作为会话名 — 当你 `resume` 回顾历史会话时，完全看不出当时在做什么。即使根据第一条消息生成标题也不够：长对话中话题会漂移，你可能从修复登录 Bug 聊到了重构认证模块，但标题还停留在最初的话题上。
+Claude Code 默认用随机 slug（如 `elegant-chasing-eich`）作为会话名。根据第一条消息起标题能好一些，但会话会往前走：你从修登录 Bug 开始，最后可能在重构认证中间件。
 
-claude-live-title 会随对话演进持续更新标题，让你在浏览历史会话或 `resume` 时，看到的是会话 **最终的实际内容**，而不只是开头的话题。
-
-如果你习惯用 tmux 或多终端窗口同时开多个会话，有意义的标题更加关键 — 切到任意窗口就能一眼看出这个会话在做什么。搭配 [Claude HUD](#配合-claude-hud-使用) 可以直接在状态栏显示标题。
+claude-live-title 让标题始终对应会话**当前**在做的事。如果你在 tmux 或多个终端里同时开着几个会话，看一眼状态栏就知道哪个是哪个、上次做到哪。搭配 [Claude HUD](#配合-claude-hud-使用) 可以直接在状态栏显示标题。
 
 ## 特性
 
-- **实时更新** — 标题在对话过程中就会出现，而不是等对话结束
-- **上下文感知** — 锚定会话最初的目标，以最新的用户意图为主信号；当你只回"好"/"继续"时，自动退回 Claude 最新回复判断方向
-- **多语言支持** — 自动检测对话语言，也可手动设置
-- **智能节流** — 首条消息立即触发，之后按频率限制更新，节省 API 调用
-- **不阻塞** — 所有 hook 异步运行，不会打断你的工作流
-- **可配置** — 模型、语言、节流间隔等均可调整
+- **跟着当前任务走** — 你换了一个任务，标题也跟着换
+- **稳定** — 还在做同一件事时标题不动；回一句"好""继续""ok"不会让标题被改写
+- **只看你说的话** — 后台任务通知、子 agent 的回报、skill 说明、压缩摘要都不算
+- **出错不乱写** — 账号用量到达上限或 API 出错时什么都不写，插件暂停一会儿再试
+- **尊重你起的名字** — 用 `/rename` 或 `--name` 命名过的会话，插件不再改动
+- **多语言** — 默认用你说话的语言，也可以指定
+- **轻量** — 每次更新一次小的 Haiku 调用（约 1.5K token，$0.0001），全部在后台运行
 - **跨平台** — 支持 Linux 和 macOS
 
 ## 工作原理
 
-插件使用两个 hook：
+插件用三个 hook：
 
-1. **UserPromptSubmit（实时）** — 在你按下回车的瞬间触发，标题在 Claude 还没开始回复时就已经在生成。等 Claude 回复结束，标题通常已经写入 transcript，HUD 下一次重渲染就能读到。有节流机制，避免过多 API 调用。
-2. **Stop（兜底）** — 如果 `UserPromptSubmit` 失败或竞速没赶上 HUD 渲染，在 Claude 回复结束时再兜底生成一次。
+1. **UserPromptSubmit（异步）** — 你发送消息时，在 Claude 回复的同时生成新标题。每 `throttleInterval` 秒最多一次，被跳过的消息由 Stop hook 补上。
+2. **Stop（异步）** — 每次回复结束后运行。会话还没有标题时起一个；补上被节流跳过的消息；长时间自主运行时每 15 分钟刷新一次；如果 Claude Code 把旧标题写回了 transcript，就恢复成最新的。
+3. **UserPromptSubmit（同步）** — `/resume`、`/compact` 或改名之后，Claude Code 会自己保留一份标题，并不断写回 transcript。这个 hook 通过官方的 `sessionTitle` 字段把最新标题交给 Claude Code，让两边保持一致。它不调用模型，大约 20 ms 完成。
 
-标题由轻量模型（默认 Haiku）根据三段式样本生成：
+模型（默认 Haiku）看到的是一份简短的会话摘要：
 
-- **`GOAL:`** — 会话的第一条用户消息，作为整个会话最初的意图锚点。长会话中 Claude 可能已经在处理一串子任务，有了 GOAL 标题就不会漂移到某个中途的技术细节上。
-- **`USER:`** — GOAL 之后最早的几条和最近的几条用户消息（分别通过 `contextMessages.head` 和 `contextMessages.tail` 配置）。最近一条有实质内容的用户消息是标题生成的主信号。
-- **`STATE:`** — Claude 最新一段文字回复，经过清洗并截断到 300 字符。默认作为**背景信息**而非标题主题；**但**当最近一条用户消息是"好"/"继续"/"ok" 这类短填充语时，STATE 会被当作意图信号——真正的任务语境在 Claude 的回复里。
+- **`CURRENT_TITLE`** — 当前显示的标题。只要工作没换方向就原样保留，标题不会来回变。
+- **`FIRST`** — 你的第一条消息，用来理解后面简短的跟进。
+- **`EARLIER`** — 最新一条之前的几条近期消息（最多 `contextMessages.tail` 条）。
+- **`LATEST`** — 你的最新一条消息，最重要的信号。
+- **`CLAUDE`** — Claude 最新回复的摘录，作为辅助信息。
 
-AI 文字在进 Haiku 之前会先过一道清洗：剥离 fenced code block、inline backtick、堆栈帧（Python / JS / Java / Ruby / Rust panic / Go panic / Node `UnhandledPromiseRejection`），以及 `$` / `>` 开头的 shell 提示符行。所有行级清洗规则维护在 `hooks/lib/sanitize-line-rules.tsv`，新增一种噪声形态只需要加一行 TSV，不用动代码。如果剩下的实质内容不足 30 字节，整条 `STATE:` 就会被丢弃——这样可以避免 Claude 上一段恰好是 `Traceback` 或命令输出时，标题跟着抄进一串无意义的报错片段。
+过长的消息只保留开头和结尾。Claude 的回复会先清洗：去掉代码块、行内代码、堆栈帧和 shell 提示符行（规则在 `hooks/lib/sanitize-line-rules.tsv`），剩下的文字太少就整段不用。
 
-样本交给 Haiku（默认模型，兼顾速度和成本，可通过 `model` 配置项更改），生成的标题写入 transcript 作为 `custom-title` 记录。
+模型调用通过 `claude -p` 进行，不带工具、不保存会话。如果返回的标题超过 `maxLength`，会再调用一次让它缩短。结果作为 `custom-title` 记录写入 transcript。
 
 ```mermaid
 flowchart LR
-    A[用户提交消息] --> B[UserPromptSubmit hook]
-    B --> C{是否通过<br/>节流检查？}
-    C -->|否| D[跳过]
-    C -->|是| E["组装 GOAL + USER + STATE<br/>（清洗 AI 文字）"]
+    A[你发送消息] --> B{是你输入的？<br/>不只是"好"？<br/>没被节流？}
+    B -->|否| D[之后由 Stop hook 补上]
+    B -->|是| E["CURRENT_TITLE + FIRST +<br/>EARLIER + LATEST + CLAUDE"]
     E --> F[Haiku 生成标题]
-    F --> G[追加 custom-title<br/>到 transcript.jsonl]
-    G --> H[HUD 显示标题<br/>在状态栏]
+    F --> G[追加 custom-title<br/>到 transcript]
+    G --> H[HUD 在状态栏<br/>显示标题]
 ```
 
 ## 安装
@@ -100,10 +101,10 @@ mkdir -p ~/.cache/tmp && TMPDIR=~/.cache/tmp claude
 /claude-live-title:config
 ```
 
-或直接编辑配置文件：
+或直接编辑配置文件。它在插件的数据目录里，目录名取决于你从哪个 marketplace 安装，例如：
 
 ```
-~/.claude/plugins/data/claude-live-title/config.json
+~/.claude/plugins/data/claude-live-title-claude-live-title/config.json
 ```
 
 ```jsonc
@@ -111,38 +112,35 @@ mkdir -p ~/.cache/tmp && TMPDIR=~/.cache/tmp claude
   // 标题生成模型（默认："haiku"）
   "model": "haiku",
 
-  // 标题语言："auto" 自动检测对话语言（默认："auto"）
+  // 标题语言（默认："auto"，即你说话的语言）
   // 可设为 "zh"、"en"、"ja"、"ko" 等指定语言
   "language": "auto",
 
-  // 目标标题显示列宽，传给 AI 的 prompt 参数（默认：30）
+  // 标题最大显示列宽（默认：30）
   // CJK 字符算 2 列，拉丁字符算 1 列
   "maxLength": 30,
 
-  // 用于生成标题的用户消息采样数
+  // 模型能看到你的多少条消息
   "contextMessages": {
-    "head": 3,  // 最早的几条消息（默认：3）
-    "tail": 5   // 最近的几条消息（默认：5）
+    "head": 1,  // 最早的几条（默认：1）
+    "tail": 5   // 最近的几条（默认：5）
   },
 
-  // 实时更新最小间隔秒数（默认：240）
-  "throttleInterval": 240,
+  // 你连续发消息时，两次更新之间的最小秒数（默认：60）
+  "throttleInterval": 60,
 
-  // 实时更新最少新消息数（默认：2）
-  "throttleMessages": 2,
-
-  // 启用实时更新（默认：true）
-  // 设为 false 则仅在会话结束时生成标题
+  // 随会话推进更新标题（默认：true）
+  // 设为 false：第一次回复后起一个标题，之后不再改
   "liveUpdate": true,
 
-  // 启用调试日志（默认：false）
+  // 在插件数据目录写调试日志（默认：false）
   "debug": false
 }
 ```
 
 ### 语言设置
 
-默认情况下（`"auto"`），插件会自动检测对话语言并生成对应语言的标题。对于单一语言的对话效果很好。
+默认情况下（`"auto"`），标题使用你自己消息的语言，即使代码和 Claude 的回复是英文。
 
 如果你用英文和 Claude 交流，但希望标题用中文，可以明确设置：
 
@@ -151,8 +149,6 @@ mkdir -p ~/.cache/tmp && TMPDIR=~/.cache/tmp claude
   "language": "zh"
 }
 ```
-
-> **提示：** 在混合语言对话中（如中文描述任务但包含大量英文代码），自动检测偶尔可能选错语言。如果你对标题语言一致性有要求，建议手动设置。
 
 ## 配合 Claude HUD 使用
 
@@ -202,17 +198,21 @@ claude-live-title 将 `custom-title` 记录写入会话 transcript 文件。Clau
 
 **标题没有出现？**
 1. 确认插件已安装并启用：在已启用插件列表中查找 `claude-live-title`
-2. 开启调试日志：在配置中设置 `"debug": true`
-3. 查看调试日志：`cat /tmp/claude-live-title-debug.log`
+2. 安装或更新后重启 Claude Code，hook 只在启动时加载
+3. 在配置中设置 `"debug": true`，然后查看 `~/.claude/plugins/data/claude-live-title-*/debug.log`
+
+**某个会话不再更新了？**
+- 如果你给它改过名（`/rename`、`--name`），插件会刻意保留你的名字。
+- 遇到用量上限后插件会暂停 10 分钟（其他错误暂停 2 分钟），避免反复撞上限。
 
 **标题语言不对？**
-在配置中明确设置语言，不要依赖自动检测。
+在配置中明确设置 `language`。
 
 **更新太频繁或太少？**
-调整配置中的 `throttleInterval`（秒）和 `throttleMessages`（消息数）。
+调整配置中的 `throttleInterval`（秒）。
 
 **遇到了离谱标题？欢迎帮我们改进。**
-开启 `"debug": true` 后，每次生成标题都会往 `/tmp/claude-live-title-debug.log` 追加一条结构化事件，记录 Haiku 真正看到的 dialog。复现到坏标题之后跑 `bin/promote-fixture.sh <slug>`，会把当时的 dialog 固化成 `tests/fixtures/transcripts/` 下的回归 fixture——附在 issue / PR 里就能用真实复现去打磨 prompt 或 sanitize 规则。
+开启 `"debug": true` 后，每次生成标题都会在调试日志里记下模型真正看到的输入。运行 `bin/promote-fixture.sh <slug>` 可以把最近一条固化成 `tests/fixtures/transcripts/` 下的回归 fixture，附在 issue 或 PR 里提交即可。
 
 ## 开发
 
@@ -225,6 +225,15 @@ claude --plugin-dir .
 ```
 
 本地开发时，`--plugin-dir` 直接从工作目录加载插件，无需安装或缓存。修改 hook 需要重启会话；修改 command/skill 可用 `/reload-plugins` 热重载。
+
+运行测试：
+
+```bash
+for t in tests/test-*.sh; do bash "$t"; done
+
+# 再用真实模型检查 fixture（花费不到一美分）
+RUN_LIVE=1 bash tests/test-fixtures.sh
+```
 
 ## 更多
 
