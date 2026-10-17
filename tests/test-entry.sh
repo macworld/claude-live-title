@@ -110,12 +110,20 @@ run_stop() {
     '{session_id:$sid, transcript_path:$tx} + (if $cwd != "" then {cwd:$cwd} else {} end)' \
     | bash "$SCRIPT_DIR/hooks/stop-title.sh" || true
 }
-# run_apply <session_title> → prints the hook's stdout
+# run_apply <session_title> [prompt] → prints the hook's stdout
 run_apply() {
-  jq -nc --arg sid "$SID" --arg tx "$TX" --arg st "${1-}" \
-    '{session_id:$sid, transcript_path:$tx, prompt:"x"} + (if $st != "" then {session_title:$st} else {} end)' \
+  jq -nc --arg sid "$SID" --arg tx "$TX" --arg st "${1-}" --arg p "${2-x}" \
+    '{session_id:$sid, transcript_path:$tx, prompt:$p} + (if $st != "" then {session_title:$st} else {} end)' \
     | bash "$SCRIPT_DIR/hooks/apply-title.sh"
 }
+# Transcript head Claude Code writes on /clear: the previous session's
+# title carried over, then the command itself.
+clear_head() {
+  cc_title "$1"
+  jq -nc '{type:"user", isMeta:true, message:{role:"user", content:"<local-command-caveat>Caveat</local-command-caveat>"}}' >> "$TX"
+  jq -nc '{type:"user", message:{role:"user", content:"<command-name>/clear</command-name>\n<command-message>clear</command-message>\n<command-args></command-args>"}}' >> "$TX"
+}
+sets_title() { jq -nc --arg t "$1" '{hookSpecificOutput:{hookEventName:"UserPromptSubmit", sessionTitle:$t}}'; }
 
 last_title()  { jq -r 'select(.type=="custom-title") | .customTitle' "$TX" | tail -1; }
 title_count() { jq -c 'select(.type=="custom-title")' "$TX" | wc -l | tr -d ' '; }
@@ -392,6 +400,12 @@ human "something else" p2
 reply "done too"
 STUB_TITLE="Changed" run_stop
 check "liveUpdate=false: never updated afterwards" "Only once" "$(last_title)"
+new_session disabledclear
+clear_head "Previous task"
+human "start on the export feature" p1
+reply "done"
+STUB_TITLE="Export feature" run_stop
+check "liveUpdate=false after /clear: the session gets its own first title" "Export feature" "$(last_title)"
 rm -f "$CLAUDE_PLUGIN_DATA/config.json"
 
 new_session style
@@ -509,12 +523,13 @@ check "/rename in the transcript: name kept" "Parser cleanup" "$(last_title)"
 [[ -f "$PIN" ]] && report PASS "/rename in the transcript: pinned" || report FAIL "not pinned"
 
 new_session cleared
-cc_title "Previous task"
-jq -nc '{type:"user", isMeta:true, message:{role:"user", content:"<local-command-caveat>Caveat</local-command-caveat>"}}' >> "$TX"
-jq -nc '{type:"user", message:{role:"user", content:"<command-name>/clear</command-name>\n<command-message>clear</command-message>\n<command-args></command-args>"}}' >> "$TX"
+clear_head "Previous task"
 human "start on the export feature" p1
 STUB_TITLE="Export feature" run_live "start on the export feature" p1 "Previous task"
 check "/clear carried the old title over: replaced by the new task" "Export feature" "$(last_title)"
+grep -qF "Previous task" "$STUB_LOG" && report FAIL "/clear: old title shown to the model as CURRENT_TITLE" \
+  || report PASS "/clear: the previous session's title isn't this session's CURRENT_TITLE"
+check "/clear: carried title kept in history" '["Previous task","Export feature"]' "$(state_get '.history|tojson')"
 
 new_session mentioned
 human "how does /rename work" p1
@@ -580,6 +595,85 @@ MS=$(( ($(now_ms) - START) / 10 ))
 (( MS < 150 )) && report PASS "apply-title.sh averages ${MS}ms" || report FAIL "apply-title.sh too slow: ${MS}ms"
 new_session applynew
 check "brand-new session, no custom title: no output" "" "$(run_apply "")"
+
+# First prompt after /clear: Claude Code shows the previous session's title
+# until the next prompt, so the prompt itself stands in for this turn.
+new_session applyclear
+clear_head "Previous task"
+OUT=$(run_apply "Previous task" "start on the export feature")
+check "after /clear: first prompt stands in for the carried title" "$(sets_title "start on the export feature")" "$OUT"
+check "after /clear: stand-in recorded as ours, no current title yet" \
+  '{"latest":"","history":["Previous task","start on the export feature"]}' "$(state_get '{latest, history}|tojson')"
+[[ ! -f "$PIN" && ! -d "$STATE_DIR/$H.lock" ]] && report PASS "after /clear: not pinned, lock released" || report FAIL "pinned or lock left"
+human "start on the export feature" p1
+STUB_TITLE="Export feature" run_live "start on the export feature" p1 "Previous task"
+check "after /clear: the generated title follows" "Export feature" "$(last_title)"
+grep -qE "CURRENT_TITLE: (Previous task|start on)" "$STUB_LOG" && report FAIL "stand-in or old title sent as CURRENT_TITLE" \
+  || report PASS "after /clear: model sees no CURRENT_TITLE"
+cc_title "start on the export feature"   # Claude Code re-appends its title
+run_stop
+check "after /clear: Stop restores ours over the re-appended stand-in" "Export feature" "$(last_title)"
+check "after /clear: next prompt swaps the stand-in for the title" "$(sets_title "Export feature")" "$(run_apply "start on the export feature")"
+[[ ! -f "$PIN" ]] && report PASS "after /clear: never pinned" || report FAIL "pinned by mistake"
+
+new_session applyclearlong
+clear_head "Previous task"
+OUT=$(run_apply "Previous task" "似乎我执行 clear 命令之后，然后再去对话写了一个新任务的时候，它并没有把标题重新命名")
+STANDIN=$(printf '%s' "$OUT" | jq -r '.hookSpecificOutput.sessionTitle')
+W=$(bash -c 'source "$1/hooks/lib/common.sh"; display_width "$2"' _ "$SCRIPT_DIR" "$STANDIN")
+[[ "$STANDIN" == 似乎我执行*… ]] && (( W <= 30 )) && report PASS "after /clear: long prompt cut to $W columns ($STANDIN)" \
+  || report FAIL "after /clear: long prompt stand-in [$STANDIN] is $W columns"
+new_session applyclearwords
+clear_head "Previous task"
+OUT=$(run_apply "Previous task" "Explain the difference between a process and a thread in two sentences.")
+check "after /clear: English prompt cut at a word" "$(sets_title "Explain the difference…")" "$OUT"
+new_session applyclearword
+clear_head "Previous task"
+OUT=$(run_apply "Previous task" "supercalifragilisticexpialidocious-and-more-hyphenated-text")
+check "after /clear: one long word cut where it hits the limit" "$(sets_title "supercalifragilisticexpialido…")" "$OUT"
+new_session applyclearspaces
+clear_head "Previous task"
+OUT=$(run_apply "Previous task" $'  fix   the\n\nlogin bug  ')
+check "after /clear: whitespace collapsed" "$(sets_title "fix the login bug")" "$OUT"
+
+new_session applyclearhi
+clear_head "Previous task"
+check "after /clear, greeting: stands in too" "$(sets_title "hi")" "$(run_apply "Previous task" "hi")"
+human "hi" p1
+STUB_TITLE="SKIP" run_live "hi" p1 "Previous task"
+check "greeting: still no title of ours" "" "$(state_get .latest)"
+check "after the greeting, the task's prompt stands in" "$(sets_title "fix the parser")" "$(run_apply "hi" "fix the parser")"
+check "same prompt again: no output" "" "$(run_apply "fix the parser" "fix the parser")"
+
+START=$(now_ms)
+for i in 1 2 3 4 5; do
+  new_session "applyclearfast$i"
+  clear_head "Previous task"
+  run_apply "Previous task" "start on the export feature" >/dev/null
+done
+MS=$(( ($(now_ms) - START) / 5 ))
+(( MS < 300 )) && report PASS "stand-in after /clear averages ${MS}ms" || report FAIL "stand-in too slow: ${MS}ms"
+
+new_session applyclearcmd
+clear_head "Previous task"
+check "after /clear, bare slash command: no output" "" "$(run_apply "Previous task" "/help")"
+[[ ! -f "$ST" ]] && report PASS "after /clear, bare slash command: state left to the async hooks" || report FAIL "state created"
+new_session applyclearbusy
+clear_head "Previous task"
+mkdir -p "$STATE_DIR/$H.lock"
+OUT=$(run_apply "Previous task" "start on the export feature"; echo "rc=$?")
+check "after /clear, lock held by a generation: no output, exit 0" "rc=0" "$OUT"
+rm -rf "$STATE_DIR/$H.lock"
+new_session applynamed
+cc_title "Name from --name"
+check "unknown session named before its first prompt: no output" "" "$(run_apply "Name from --name" "do things")"
+[[ ! -f "$ST" && ! -f "$PIN" ]] && report PASS "named session: left to the async hooks" || report FAIL "state or pin created"
+new_session applyclearold
+clear_head "Previous task"
+human "start on the export feature" p1
+reply "Done."
+cc_title "Export feature"
+check "resumed /clear session the plugin never saw: no stand-in" "" "$(run_apply "Export feature" "and the import")"
 
 echo ""
 echo "================================"

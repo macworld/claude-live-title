@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [2.1.2] - 2026-10-17
+
+### Fixed
+- After `/clear`, the first turn no longer shows the previous task's title. `/clear` starts a new session but carries the old title over, and Claude Code keeps showing it in the terminal tab and the statusline, writing it back into the transcript after every request, until a hook hands it another one. The plugin could only do that with your next message, so the whole first turn kept the old name. Now your first message after `/clear` stands in as the title right away, cut to `maxLength` (at a word for Latin text), and the generated title replaces it with your next message. In Claude Code 2.1.302 nothing earlier works: an empty `sessionTitle` is ignored, and SessionStart's `sessionTitle` doesn't apply after `/clear`.
+- The first title after `/clear` is written from scratch. The carried-over title used to reach the model as the current title, so a related new task could keep the previous session's name.
+- With `liveUpdate: false`, a session started by `/clear` gets its own first title instead of keeping the carried-over one.
+
 ## [2.1.1] - 2026-10-17
 
 ### Security

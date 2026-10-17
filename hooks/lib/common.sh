@@ -313,8 +313,9 @@ state_save() {
 # already on the session are ours to update, except when the transcript shows
 # the user chose one: a /rename, or a title that was there before the first
 # message (--name, or a name given in an app) in a session not started by
-# /clear (which carries the previous session's title over). Earlier versions'
-# /tmp markers can't be relied on: /tmp is wiped on reboot.
+# /clear. /clear carries the previous session's title over; it is kept as
+# ours but isn't this session's title, so the first one is written fresh.
+# Earlier versions' /tmp markers can't be relied on: /tmp is wiped on reboot.
 state_bootstrap() {
   local transcript="$1" cc_title="${2-}" human_count="${3-0}"
   [[ -f "$STATE_FILE" ]] && return 0
@@ -330,12 +331,12 @@ state_bootstrap() {
     return 0
   fi
 
-  local legacy_gen=0 reason=""
+  local legacy_gen=0 reason="" cleared=false
   if [[ -f "$LEGACY_STATE" || -d "$LEGACY_MARKER" ]]; then
     [[ -f "$LEGACY_STATE" ]] && read -r legacy_gen _ < "$LEGACY_STATE" 2>/dev/null
     [[ "$legacy_gen" =~ ^[0-9]+$ ]] || legacy_gen=0
   else
-    local first_title first_human renamed cleared
+    local first_title first_human renamed
     read -r first_title first_human renamed cleared <<< "$(_title_provenance "$transcript")"
     # A title Claude Code holds but the transcript doesn't show yet is as
     # old as the session.
@@ -350,8 +351,13 @@ state_bootstrap() {
   if [[ -z "$reason" ]]; then
     local hist
     hist=$(printf '%s\n' "$titles" | awk 'NF' | jq -R . | jq -sc .)
-    state_save "$last" "$legacy_gen" "$human_count" "$hist"
-    log "Bootstrap: adopted existing titles (latest='$last')"
+    if [[ "$cleared" == "true" ]]; then
+      state_save "" 0 0 "$hist"
+      log "Bootstrap: /clear carried '$last' over"
+    else
+      state_save "$last" "$legacy_gen" "$human_count" "$hist"
+      log "Bootstrap: adopted existing titles (latest='$last')"
+    fi
   else
     state_save "" 0 0
     pin_session "$reason ('$last')"
@@ -382,6 +388,15 @@ _title_provenance() {
          else . end)
       | "\(.t) \(.h) \(.renamed) \(.cleared)"' 2>/dev/null)
   printf '%s\n' "${out:-0 0 false false}"
+}
+
+# A session started by /clear that has no reply yet. Fast on any transcript:
+# one with replies stops the first grep early, one without is small.
+fresh_from_clear() {
+  local transcript="$1"
+  [[ -f "$transcript" ]] || return 1
+  grep -qF '"type":"assistant"' "$transcript" 2>/dev/null && return 1
+  grep -qF '<command-name>/clear</command-name>' "$transcript" 2>/dev/null
 }
 
 # A title Claude Code reports (session_title) or the transcript ends with.
@@ -1003,17 +1018,43 @@ is_skip_reply() {
   [[ "$(printf '%s' "$1" | LC_ALL=C tr -cd 'A-Za-z' | tr 'a-z' 'A-Z')" == "SKIP" ]]
 }
 
+# Columns a code point takes in a terminal status bar: East Asian wide
+# characters (CJK, Hangul, fullwidth forms, most emoji) take 2, everything
+# else 1.
+_WIDTH_JQ_DEFS='
+def colw:
+  if (. >= 4352 and . <= 4447) or (. >= 11904 and . <= 42191)
+     or (. >= 44032 and . <= 55203) or (. >= 63744 and . <= 64255)
+     or (. >= 65072 and . <= 65103) or (. >= 65280 and . <= 65376)
+     or (. >= 65504 and . <= 65510) or (. >= 127744 and . <= 129791)
+     or (. >= 131072 and . <= 262141)
+  then 2 else 1 end;
+'
+
 # display_width <text>
-# Columns a terminal status bar uses: East Asian wide characters (CJK,
-# Hangul, fullwidth forms, most emoji) take 2, everything else 1.
 display_width() {
-  printf '%s' "$1" | jq -Rrs '[explode[]
-    | if (. >= 4352 and . <= 4447) or (. >= 11904 and . <= 42191)
-         or (. >= 44032 and . <= 55203) or (. >= 63744 and . <= 64255)
-         or (. >= 65072 and . <= 65103) or (. >= 65280 and . <= 65376)
-         or (. >= 65504 and . <= 65510) or (. >= 127744 and . <= 129791)
-         or (. >= 131072 and . <= 262141)
-      then 2 else 1 end] | add // 0' 2>/dev/null || printf '%s' "${#1}"
+  printf '%s' "$1" | jq -Rrs "${_WIDTH_JQ_DEFS}"'[explode[] | colw] | add // 0' 2>/dev/null || printf '%s' "${#1}"
+}
+
+# stand_in_title <prompt>
+# What a person typed in a UserPromptSubmit prompt, on one line and cut to
+# MAX_LENGTH columns. Shown while a session started by /clear waits for its
+# first title. Empty when the prompt isn't something a person typed.
+stand_in_title() {
+  jq -n -r --arg p "$1" --argjson max "$MAX_LENGTH" "${_HUMAN_JQ_DEFS}${_WIDTH_JQ_DEFS}"'
+    {type:"user", message:{content:$p}} | human_text
+    | if ([explode[] | colw] | add // 0) <= $max then .
+      else (reduce explode[] as $c ({s: [], w: 0, next: null};
+              if .next != null then .
+              elif .w + ($c | colw) > $max - 1 then .next = $c
+              else .s += [$c] | .w += ($c | colw) end)
+            | (.s | implode) as $cut
+            # A cut through a Latin word ends at the word before, unless
+            # that loses more than half.
+            | (if ([.next] | implode | test("[A-Za-z0-9]")) and ($cut | test("[A-Za-z0-9]$"))
+               then $cut | sub(" [^ ]*$"; "") else $cut end) as $word
+            | (if ($word | length) * 2 >= ($cut | length) then $word else $cut end)
+            | sub(" +$"; "")) + "…" end' 2>/dev/null
 }
 
 # fit_title <title>
