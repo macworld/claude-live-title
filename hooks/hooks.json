@@ -2,7 +2,6 @@
   "hooks": {
     "UserPromptSubmit": [
       {
-        "matcher": "*",
         "hooks": [
           {
             "type": "command",
@@ -12,21 +11,18 @@
           {
             "type": "command",
             "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/live-title.sh\"",
-            "async": true,
-            "timeout": 60
+            "async": true
           }
         ]
       }
     ],
     "Stop": [
       {
-        "matcher": "*",
         "hooks": [
           {
             "type": "command",
             "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/stop-title.sh\"",
-            "async": true,
-            "timeout": 60
+            "async": true
           }
         ]
       }
