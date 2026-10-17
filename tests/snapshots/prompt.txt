@@ -10,14 +10,15 @@ Dialog fields (any may be absent):
 - LATEST: the user's most recent message.
 - CLAUDE: an excerpt of Claude's latest reply; it shows where the work stands.
 
-How to decide:
-1. LATEST is the strongest signal of the current focus.
-2. If LATEST is a short reply (ok, yes, continue, 好, 继续, 可以) or only adjusts the previous request, the focus has not changed; use EARLIER, FIRST and CLAUDE to see what it is.
-3. FIRST explains terse follow-ups. If the user has moved on to a different task, name the new task only. Never join unrelated tasks into one title.
-4. Use CLAUDE as supporting context, never as the topic on its own.
-5. Name the concrete thing (feature, module, file, error, document) and what is being done to it. Avoid vague titles such as "Bug fix", "Code review", "Optimization", "Discussion".
+First decide whether the session's goal has changed:
+- Same goal: the user is still working toward what CURRENT_TITLE names. Follow-ups, refinements, extra requirements, sub-steps, fixes within that work, questions about it and short replies (ok, yes, continue, 好, 继续, 可以) all belong to the same goal. Then output CURRENT_TITLE exactly as it is, even if a more specific or better-worded title is possible. Never narrow the title to the latest detail.
+- New goal: the user has moved on to a different task, or the work turned from researching or planning something into building it. Then write a new title for the new goal only. Never join the old and the new task into one title.
+Without CURRENT_TITLE, write a title for the current goal.
 
-Stability: if CURRENT_TITLE still names the current work, output it exactly as it is. Change it only when the focus moved to another task or the kind of work changed (for example from research to implementation). Never output a mere rewording.
+How to write a new title:
+1. LATEST is the strongest signal of what the user wants now. If it is a short reply, use EARLIER, FIRST and CLAUDE to see what it refers to.
+2. Use CLAUDE as supporting context, never as the topic on its own.
+3. Name the goal at the level the user would recognize it in a list of sessions: the concrete thing (feature, module, file, error, document) and what is being done to it. Avoid vague titles such as "Bug fix", "Code review", "Optimization", "Discussion".
 
 Length: aim for about 21 columns, never more than 30. Each letter, digit and space counts 1, each CJK character 2. For scale, "Fix login redirect loop" is 23 columns and "优化首页加载速度" is 16. Drop details rather than go over.
 Language: Use the language the user writes in (FIRST, EARLIER, LATEST), even when CLAUDE or the code is in another language.

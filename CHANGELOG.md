@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [2.0.2] - 2026-10-17
+
+### Changed
+- The title changes only when the session's goal does. The prompt now first decides whether the user is still working toward what the current title names; follow-ups, refinements, extra requirements, sub-steps and fixes within that work keep the title exactly as it is. A new task, or moving from researching something to building it, gets a new title. In a 12-case check with Haiku 5.5 (4 samples each), same-goal follow-ups kept the title 32/32 (16/20 before: the old prompt narrowed titles to the latest detail, e.g. "Onboarding copy rework" → "Onboarding headline under 40 chars") and real task switches changed it 16/16.
+
 ## [2.0.1] - 2026-10-17
 
 ### Fixed
