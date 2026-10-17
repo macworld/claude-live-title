@@ -348,6 +348,39 @@ STUB_TITLE="x" run_live "do things" p1 "Name from --name"
 check "pre-existing unknown title: not overwritten" "Name from --name" "$(last_title)"
 [[ -f "$PIN" ]] && report PASS "pre-existing unknown title: pinned" || report FAIL "not pinned"
 
+new_session markers-gone
+human "fix the parser" p1
+cc_title "Fix parser"
+human "now the lexer" p2
+STUB_TITLE="Lexer work" run_live "now the lexer" p2 "Fix parser"
+check "older plugin title, /tmp markers wiped: adopted and updated" "Lexer work" "$(last_title)"
+[[ ! -f "$PIN" ]] && report PASS "older plugin title: not pinned" || report FAIL "pinned by mistake"
+
+new_session renamed
+human "fix the parser" p1
+jq -nc '{type:"user", message:{role:"user", content:"<command-name>/rename</command-name>\n<command-message>rename</command-message>\n<command-args>Parser cleanup</command-args>"}}' >> "$TX"
+cc_title "Parser cleanup"
+human "go on" p2
+STUB_TITLE="x" run_live "keep going" p2 "Parser cleanup"
+check "/rename in the transcript: name kept" "Parser cleanup" "$(last_title)"
+[[ -f "$PIN" ]] && report PASS "/rename in the transcript: pinned" || report FAIL "not pinned"
+
+new_session cleared
+cc_title "Previous task"
+jq -nc '{type:"user", isMeta:true, message:{role:"user", content:"<local-command-caveat>Caveat</local-command-caveat>"}}' >> "$TX"
+jq -nc '{type:"user", message:{role:"user", content:"<command-name>/clear</command-name>\n<command-message>clear</command-message>\n<command-args></command-args>"}}' >> "$TX"
+human "start on the export feature" p1
+STUB_TITLE="Export feature" run_live "start on the export feature" p1 "Previous task"
+check "/clear carried the old title over: replaced by the new task" "Export feature" "$(last_title)"
+
+new_session mentioned
+human "how does /rename work" p1
+reply "It writes <command-name>/rename</command-name> into the transcript."
+cc_title "Explain rename"
+human "and /clear?" p2
+STUB_TITLE="Explain rename and clear" run_live "and /clear?" p2 "Explain rename"
+check "/rename only mentioned in text: still adopted" "Explain rename and clear" "$(last_title)"
+
 new_session legacy
 cc_title "Old plugin title"
 echo "$(( $(date +%s) - 500 )) 3" > "/tmp/claude-live-title-state-$H"

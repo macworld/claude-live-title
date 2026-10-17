@@ -273,10 +273,12 @@ state_save() {
   return 0
 }
 
-# Create state for a session this plugin version hasn't seen yet. Titles that
-# are already on the session count as ours only when there's evidence we wrote
-# them: legacy (≤1.3) /tmp markers, or another session's history (a fork).
-# Anything else was named by the user or another tool, so the session is pinned.
+# Create state for a session this plugin version hasn't seen yet. Titles
+# already on the session are ours to update, except when the transcript shows
+# the user chose one: a /rename, or a title that was there before the first
+# message (--name, or a name given in an app) in a session not started by
+# /clear (which carries the previous session's title over). Earlier versions'
+# /tmp markers can't be relied on: /tmp is wiped on reboot.
 state_bootstrap() {
   local transcript="$1" cc_title="${2-}" human_count="${3-0}"
   [[ -f "$STATE_FILE" ]] && return 0
@@ -292,36 +294,58 @@ state_bootstrap() {
     return 0
   fi
 
-  local ours=false legacy_gen=0
+  local legacy_gen=0 reason=""
   if [[ -f "$LEGACY_STATE" || -d "$LEGACY_MARKER" ]]; then
-    ours=true
     [[ -f "$LEGACY_STATE" ]] && read -r legacy_gen _ < "$LEGACY_STATE" 2>/dev/null
     [[ "$legacy_gen" =~ ^[0-9]+$ ]] || legacy_gen=0
-  elif _title_in_other_state "$last"; then
-    ours=true
+  else
+    local first_title first_human renamed cleared
+    read -r first_title first_human renamed cleared <<< "$(_title_provenance "$transcript")"
+    # A title Claude Code holds but the transcript doesn't show yet is as
+    # old as the session.
+    [[ "$first_title" == "0" ]] && first_title=1
+    if [[ "$renamed" == "true" ]]; then
+      reason="the session was renamed with /rename"
+    elif [[ "$cleared" != "true" ]] && { [[ "$first_human" == "0" ]] || (( first_title < first_human )); }; then
+      reason="the session was named before its first message"
+    fi
   fi
 
-  if [[ "$ours" == "true" ]]; then
+  if [[ -z "$reason" ]]; then
     local hist
     hist=$(printf '%s\n' "$titles" | awk 'NF' | jq -R . | jq -sc .)
     state_save "$last" "$legacy_gen" "$human_count" "$hist"
     log "Bootstrap: adopted existing titles (latest='$last')"
   else
     state_save "" 0 0
-    pin_session "existing title '$last' was not written by this plugin"
+    pin_session "$reason ('$last')"
   fi
   rm -f "$LEGACY_STATE" 2>/dev/null
   rm -rf "$LEGACY_MARKER" "$LEGACY_LOCK" 2>/dev/null
   return 0
 }
 
-_title_in_other_state() {
-  local t="$1" f
-  for f in "$STATE_DIR"/*.json; do
-    [[ -f "$f" && "$f" != "$STATE_FILE" ]] || continue
-    jq -e --arg t "$t" 'any((.history // [])[]; . == $t)' "$f" >/dev/null 2>&1 && return 0
-  done
-  return 1
+# Prints "<first title line> <first human message line> <renamed> <cleared>"
+# for a transcript (0 = none). Only lines that can matter are parsed.
+_title_provenance() {
+  local transcript="$1"
+  [[ -f "$transcript" ]] || { echo "0 0 false false"; return 0; }
+  local out
+  out=$(grep -n -E '"type":"(custom-title|user)"' "$transcript" 2>/dev/null \
+    | grep -vF '"type":"tool_result"' \
+    | jq -n -R -r "${_HUMAN_JQ_DEFS}"'
+      def cmd($c): .type == "user" and (_text | test("^\\s*<command-name>\\s*/" + $c + "\\s*</command-name>"));
+      reduce (inputs | index(":") as $i
+              | {n: (.[0:$i] | tonumber), e: (.[($i + 1):] | fromjson? // null)}
+              | select(.e | type == "object")) as $r
+        ({t: 0, h: 0, renamed: false, cleared: false};
+         if $r.e.type == "custom-title" then (if .t == 0 then .t = $r.n else . end)
+         elif ($r.e | cmd("rename")) then .renamed = true
+         elif ($r.e | cmd("clear")) then .cleared = true
+         elif .h == 0 and ($r.e | human_text | length > 0) then .h = $r.n
+         else . end)
+      | "\(.t) \(.h) \(.renamed) \(.cleared)"' 2>/dev/null)
+  printf '%s\n' "${out:-0 0 false false}"
 }
 
 # A title Claude Code reports (session_title) or the transcript ends with.

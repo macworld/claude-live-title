@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [2.0.1] - 2026-10-17
+
+### Fixed
+- Sessions titled by earlier versions are no longer frozen after an upgrade. Titles already on a session used to count as the plugin's only if the old `/tmp` markers were still there; `/tmp` is wiped on reboot, so most older sessions were treated as user-named and never updated again. Existing titles are now adopted unless the transcript shows that the user chose one: a `/rename`, or a title present before the first message (`--name`) in a session that wasn't started with `/clear`.
+- After `/clear`, the title carried over from the previous session is replaced once you start the new task.
+
 ## [2.0.0] - 2026-10-17
 
 ### Changed
